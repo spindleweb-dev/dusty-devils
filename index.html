@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dusty Devils</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #14110d; color: #e8dcc6;
+    font-family: "Trebuchet MS", system-ui, sans-serif; overflow: hidden; }
+  #wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; }
+  #game { width: min(96vw, calc((100vh - 64px) * 1.6)); aspect-ratio: 16 / 10;
+    image-rendering: pixelated; background: #000; border-radius: 6px;
+    box-shadow: 0 0 0 3px #2a2118, 0 10px 40px rgba(0,0,0,.6); }
+  #help { font-size: 13px; opacity: .75; text-align: center; padding: 0 8px; }
+  #help b { color: #ffc861; font-weight: 600; }
+  #tune { position: fixed; top: 10px; right: 10px; width: 270px; max-height: calc(100vh - 20px); overflow-y: auto;
+    background: rgba(20,16,12,.94); border: 1px solid #5a4630; border-radius: 8px; padding: 10px 12px; font-size: 12px; z-index: 5; }
+  #tune h3 { margin: 4px 0 8px; font-size: 13px; color: #ffc861; letter-spacing: .05em; }
+  #tune label { display: block; margin: 6px 0 1px; }
+  #tune label span { float: right; color: #ffc861; font-variant-numeric: tabular-nums; }
+  #tune input[type=range] { width: 100%; accent-color: #d9893b; }
+  #tune .row { display: flex; gap: 6px; margin-top: 10px; }
+  #tune button { flex: 1; background: #3a2c1e; color: #e8dcc6; border: 1px solid #6b5338; border-radius: 4px; padding: 5px; cursor: pointer; font: inherit; }
+  #tune button:hover { background: #4d3a27; }
+  #tune .note { opacity: .6; margin-top: 8px; line-height: 1.35; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+  <div id="help">
+    <b>↑/W</b> accelerate · <b>↓/S</b> brake / reverse · <b>←→ / A D</b> steer ·
+    <b>R</b> reset · <b>G</b> classic/enhanced · <b>T</b> tuning · <b>Shift+D</b> debug · <b>M</b> sound
+  </div>
+</div>
+<div id="tune" hidden>
+  <h3>HANDLING TUNING</h3>
+  <div id="sliders"></div>
+  <div class="row"><button id="tReset">Reset defaults</button><button id="tCopy">Copy settings</button></div>
+  <div class="note">Settings are saved in this browser. Handling is the heart of the game, so tweak away and tell me what feels right.</div>
+</div>
+
+<script>
+"use strict";
+// ============================================================
+//  DUSTY DEVILS — step 1: one track, one truck, drift handling
+//  Logical screen is 320×200 (arcade-ish). Classic mode draws at
+//  1× with 16-direction truck sprites; Enhanced draws at 4×.
+// ============================================================
+const W = 320, H = 200;
+const STEP = 1 / 120;
+
+// ---------- Physics settings (live-tunable) ----------
+const PHYS_DEFAULTS = {
+  accel: 150,          // px/s² from standstill
+  maxSpeed: 118,       // px/s top speed
+  reverseMax: 45,
+  brake: 260,
+  rollDrag: 0.35,      // per second, along the truck
+  steerRate: 3.6,      // rad/s turning at full speed
+  steerFullSpeed: 40,  // below this speed steering is weaker
+  latGrip: 9,          // how fast sideways sliding is cancelled
+  latMax: 240,         // most sideways grip (px/s²) — lower = more drift
+  throttleSlip: 0.45,  // grip lost when steering on full throttle (power slide)
+  wallBounce: 0.35,
+  wallScrub: 0.82      // speed kept after a wall hit
+};
+const PHYS_META = [
+  ["accel", "Acceleration", 40, 400, 5],
+  ["maxSpeed", "Top speed", 40, 250, 1],
+  ["reverseMax", "Reverse speed", 10, 120, 1],
+  ["brake", "Brakes", 50, 600, 10],
+  ["rollDrag", "Rolling drag", 0, 2, 0.05],
+  ["steerRate", "Steering rate", 1, 8, 0.1],
+  ["steerFullSpeed", "Full steering from speed", 0, 120, 1],
+  ["latGrip", "Grip stiffness", 0.5, 30, 0.5],
+  ["latMax", "Grip limit (lower = drift)", 40, 800, 5],
+  ["throttleSlip", "Power-slide on throttle", 0, 0.95, 0.05],
+  ["wallBounce", "Wall bounce", 0, 1, 0.05],
+  ["wallScrub", "Speed kept on wall hit", 0.3, 1, 0.01]
+];
+function store(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+function recall(k) { try { const s = localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
+const P = Object.assign({}, PHYS_DEFAULTS, recall("dd_phys") || {});
+
+// ---------- Track: closed Catmull-Rom spline ----------
+const HW = 14;          // half width of the dirt
+const TRUCK_R = 4;      // collision radius
+const TRACK_PTS = [
+  [40, 72], [75, 34], [170, 32], [268, 35], [295, 72], [245, 94], [182, 92],
+  [163, 115], [195, 133], [283, 145], [273, 177], [150, 178], [58, 175], [27, 134]
+];
+const track = buildTrack(TRACK_PTS, 1.5, 150);
+
+function buildTrack(pts, spacing, startX) {
+  // dense spline
+  const dense = [];
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[(i - 1 + n) % n], p1 = pts[i], p2 = pts[(i + 1) % n], p3 = pts[(i + 2) % n];
+    for (let k = 0; k < 40; k++) {
+      const t = k / 40, t2 = t * t, t3 = t2 * t;
+      dense.push([
+        0.5 * (2 * p1[0] + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3),
+        0.5 * (2 * p1[1] + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)
+      ]);
+    }
+  }
+  // resample evenly by arc length
+  const out = [];
+  let acc = 0;
+  out.push({ x: dense[0][0], y: dense[0][1] });
+  for (let i = 1; i <= dense.length; i++) {
+    const a = dense[i - 1], b = dense[i % dense.length];
+    let seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    let pos = 0;
+    while (acc + (seg - pos) >= spacing) {
+      pos += spacing - acc; acc = 0;
+      const f = pos / seg;
+      out.push({ x: a[0] + (b[0] - a[0]) * f, y: a[1] + (b[1] - a[1]) * f });
+    }
+    acc += seg - pos;
+  }
+  if (Math.hypot(out[out.length - 1].x - out[0].x, out[out.length - 1].y - out[0].y) < spacing * 0.5) out.pop();
+  // rotate so sample 0 is the start line: on the top straight nearest startX
+  let best = 0, bd = 1e9;
+  out.forEach((p, i) => { const d = Math.abs(p.x - startX) + Math.abs(p.y - 32) * 3; if (d < bd) { bd = d; best = i; } });
+  const s = out.slice(best).concat(out.slice(0, best));
+  // tangents + arc length
+  let len = 0;
+  for (let i = 0; i < s.length; i++) {
+    const a = s[(i - 1 + s.length) % s.length], b = s[(i + 1) % s.length];
+    const tl = Math.hypot(b.x - a.x, b.y - a.y);
+    s[i].tx = (b.x - a.x) / tl; s[i].ty = (b.y - a.y) / tl;
+    s[i].s = len;
+    const nx = s[(i + 1) % s.length];
+    len += Math.hypot(nx.x - s[i].x, nx.y - s[i].y);
+  }
+  return { pts: s, len };
+}
+
+// nearest point on the centreline (projected onto segments)
+function nearest(x, y) {
+  const p = track.pts, n = p.length;
+  let bi = 0, bd = 1e18;
+  for (let i = 0; i < n; i++) {
+    const dx = p[i].x - x, dy = p[i].y - y, d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; bi = i; }
+  }
+  let best = null;
+  for (const j of [bi - 1, bi]) {
+    const a = p[(j + n) % n], b = p[(j + 1 + n) % n];
+    const ex = b.x - a.x, ey = b.y - a.y, el = ex * ex + ey * ey;
+    let f = ((x - a.x) * ex + (y - a.y) * ey) / el;
+    f = Math.max(0, Math.min(1, f));
+    const px = a.x + ex * f, py = a.y + ey * f;
+    const d = Math.hypot(x - px, y - py);
+    if (!best || d < best.d) {
+      let s = a.s + f * Math.sqrt(el);
+      if (s >= track.len) s -= track.len;
+      best = { d, px, py, s, i: (j + n) % n };
+    }
+  }
+  return best;
+}
+
+// ---------- Canvas / modes ----------
+const cv = document.getElementById("game");
+const ctx = cv.getContext("2d");
+let classic = recall("dd_classic") === true;
+let S = 4;
+let bg, skid, skidCtx;
+let debug = false;
+
+function setMode() {
+  S = classic ? 1 : 4;
+  cv.width = W * S; cv.height = H * S;
+  ctx.imageSmoothingEnabled = !classic;
+  bg = buildBackground();
+  skid = document.createElement("canvas");
+  skid.width = W * S; skid.height = H * S;
+  skidCtx = skid.getContext("2d");
+  skidCtx.setTransform(S, 0, 0, S, 0, 0);
+}
+
+// small seeded RNG so the scenery is the same every time
+function rng(seed) { return () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
+
+function trackPath(c) {
+  c.beginPath();
+  track.pts.forEach((p, i) => i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y));
+  c.closePath();
+}
+
+function buildBackground() {
+  const c = document.createElement("canvas");
+  c.width = W * S; c.height = H * S;
+  const g = c.getContext("2d");
+  g.setTransform(S, 0, 0, S, 0, 0);
+  g.lineJoin = g.lineCap = "round";
+  const R = rng(7);
+
+  // grass
+  g.fillStyle = classic ? "#3f7a2a" : "#47792e";
+  g.fillRect(0, 0, W, H);
+  const speck = classic ? 500 : 5000;
+  for (let i = 0; i < speck; i++) {
+    const v = R();
+    g.fillStyle = v < 0.5 ? "rgba(30,60,18,.35)" : v < 0.85 ? "rgba(110,160,60,.3)" : "rgba(160,150,80,.25)";
+    const sz = classic ? 1 : 0.25 + R() * 0.6;
+    g.fillRect(R() * W, R() * H, sz, sz * (classic ? 1 : 1.8));
+  }
+  if (!classic) { // mown stripes
+    for (let x = -H; x < W; x += 24) {
+      g.fillStyle = "rgba(255,255,255,.025)";
+      g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 12, 0); g.lineTo(x + 12 + H * 0.5, H); g.lineTo(x + H * 0.5, H); g.fill();
+    }
+  }
+
+  // shadow of the walls onto the grass
+  if (!classic) {
+    g.save(); g.translate(1.2, 1.6);
+    trackPath(g); g.strokeStyle = "rgba(0,0,0,.28)"; g.lineWidth = HW * 2 + 9; g.stroke();
+    g.restore();
+  }
+  // tyre wall base
+  trackPath(g); g.strokeStyle = "#1c1a18"; g.lineWidth = HW * 2 + 8; g.stroke();
+
+  // dirt on its own layer so we can texture it
+  const d = document.createElement("canvas");
+  d.width = W * S; d.height = H * S;
+  const dg = d.getContext("2d");
+  dg.setTransform(S, 0, 0, S, 0, 0);
+  dg.lineJoin = dg.lineCap = "round";
+  trackPath(dg); dg.strokeStyle = "#7c5530"; dg.lineWidth = HW * 2 + 1; dg.stroke();   // packed rim
+  trackPath(dg); dg.strokeStyle = classic ? "#b07a44" : "#a8743f"; dg.lineWidth = HW * 2 - 3; dg.stroke();
+  dg.globalCompositeOperation = "source-atop";
+  const blot = classic ? 120 : 900;
+  for (let i = 0; i < blot; i++) {
+    const p = track.pts[(R() * track.pts.length) | 0];
+    const off = (R() - 0.5) * HW * 2.2;
+    const x = p.x - p.ty * off, y = p.y + p.tx * off;
+    const r = classic ? 1 : 0.6 + R() * 3.2;
+    dg.fillStyle = R() < 0.55 ? "rgba(90,58,28,.18)" : "rgba(210,165,105,.16)";
+    dg.beginPath(); dg.ellipse(x, y, r, r * 0.7, R() * 3, 0, Math.PI * 2); dg.fill();
+  }
+  if (!classic) {
+    for (let i = 0; i < 9000; i++) {   // grit
+      const p = track.pts[(R() * track.pts.length) | 0];
+      const off = (R() - 0.5) * HW * 2;
+      dg.fillStyle = R() < 0.5 ? "rgba(60,38,18,.45)" : "rgba(235,200,150,.35)";
+      dg.fillRect(p.x - p.ty * off + (R() - .5), p.y + p.tx * off + (R() - .5), 0.3, 0.3);
+    }
+    // worn racing groove down the middle
+    dg.globalAlpha = 0.18; trackPath(dg); dg.strokeStyle = "#5e3d1d"; dg.lineWidth = HW * 0.9; dg.stroke(); dg.globalAlpha = 1;
+  }
+  dg.globalCompositeOperation = "source-over";
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.drawImage(d, 0, 0);
+  g.setTransform(S, 0, 0, S, 0, 0);
+
+  // tyres along both edges
+  const p = track.pts;
+  for (const side of [-1, 1]) {
+    let last = null;
+    for (let i = 0; i < p.length; i++) {
+      const off = side * (HW + 2.2);
+      const x = p[i].x - p[i].ty * off, y = p[i].y + p[i].tx * off;
+      if (last && Math.hypot(x - last[0], y - last[1]) < 3.6) continue;
+      last = [x, y];
+      if (classic) {
+        g.fillStyle = "#2a2a2a"; g.fillRect(Math.round(x) - 1, Math.round(y) - 1, 3, 3);
+        g.fillStyle = "#6a6a6a"; g.fillRect(Math.round(x) - 1, Math.round(y) - 1, 1, 1);
+      } else {
+        g.fillStyle = "#121212"; g.beginPath(); g.arc(x, y, 2.1, 0, 7); g.fill();
+        g.strokeStyle = "#3d3d3d"; g.lineWidth = 0.5; g.beginPath(); g.arc(x, y, 1.5, 0, 7); g.stroke();
+        g.fillStyle = "#050505"; g.beginPath(); g.arc(x, y, 0.75, 0, 7); g.fill();
+        g.fillStyle = "rgba(255,255,255,.18)"; g.beginPath(); g.arc(x - 0.7, y - 0.8, 0.6, 0, 7); g.fill();
+      }
+    }
+  }
+
+  // start / finish chequers
+  const s0 = p[0];
+  const nx = -s0.ty, ny = s0.tx;
+  const sq = classic ? 2 : 1.75;
+  for (let k = -HW; k < HW; k += sq) {
+    for (let row = 0; row < 2; row++) {
+      const white = (Math.round((k + HW) / sq) + row) % 2 === 0;
+      g.fillStyle = white ? "#f4f0e6" : "#151515";
+      const bx = s0.x + nx * k + s0.tx * (row * sq - sq), by = s0.y + ny * k + s0.ty * (row * sq - sq);
+      g.save(); g.translate(bx, by); g.rotate(Math.atan2(s0.ty, s0.tx)); g.fillRect(0, 0, sq + 0.05, sq + 0.05); g.restore();
+    }
+  }
+
+  // a few bushes in the infield for life
+  if (!classic) {
+    const R2 = rng(99);
+    for (let i = 0; i < 26; i++) {
+      const x = 20 + R2() * 280, y = 20 + R2() * 165;
+      if (nearest(x, y).d < HW + 8) continue;
+      const r = 2 + R2() * 3;
+      g.fillStyle = "rgba(0,0,0,.25)"; g.beginPath(); g.ellipse(x + 1, y + 1.3, r, r * 0.8, 0, 0, 7); g.fill();
+      g.fillStyle = "#2f5a1f"; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+      g.fillStyle = "#4c8331"; g.beginPath(); g.arc(x - r * 0.25, y - r * 0.3, r * 0.6, 0, 7); g.fill();
+    }
+  }
+  return c;
+}
+
+// ---------- Truck ----------
+const truck = { color: "#d8342c", dark: "#8f1d18", light: "#ff6a52" };
+
+function resetTruck() {
+  const n = track.pts.length;
+  const p = track.pts[(n - 14) % n];
+  Object.assign(truck, {
+    x: p.x, y: p.y, a: Math.atan2(p.ty, p.tx), vx: 0, vy: 0, steerVis: 0, slide: 0,
+    timing: false, lapStart: 0, laps: 0, halfway: false, lastLap: null,
+    best: recall("dd_best"), prevS: nearest(p.x, p.y).s
+  });
+  if (skidCtx) skidCtx.clearRect(0, 0, W, H);
+  particles.length = 0;
+}
+
+const keys = {};
+let raceTime = 0;
+const particles = [];
+
+function updateTruck(t, dt) {
+  const thr = keys.up ? 1 : 0;
+  const brk = keys.down ? 1 : 0;
+  const st = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+
+  // steering (weaker at low speed, flipped in reverse)
+  let fx = Math.cos(t.a), fy = Math.sin(t.a);
+  const vfPrev = t.vx * fx + t.vy * fy;
+  const steerScale = Math.min(1, Math.abs(vfPrev) / Math.max(1, P.steerFullSpeed));
+  t.a += st * P.steerRate * steerScale * (vfPrev < -1 ? -1 : 1) * dt;
+  t.steerVis += (st * 0.45 - t.steerVis) * Math.min(1, dt * 14);
+
+  // split velocity into along-truck and sideways
+  fx = Math.cos(t.a); fy = Math.sin(t.a);
+  const rx = -fy, ry = fx;
+  let vf = t.vx * fx + t.vy * fy;
+  let vl = t.vx * rx + t.vy * ry;
+
+  if (thr) {
+    if (vf < 0) vf += P.brake * dt;
+    else vf += P.accel * Math.max(0, 1 - vf / P.maxSpeed) * dt;
+  }
+  if (brk) {
+    if (vf > 0) vf = Math.max(0, vf - P.brake * dt);
+    else vf = Math.max(-P.reverseMax, vf - P.accel * 0.5 * (1 + vf / P.reverseMax) * dt);
+  }
+  vf -= vf * P.rollDrag * dt;
+
+  // tyres try to kill sideways motion, but only up to the grip limit
+  const lim = P.latMax * (1 - P.throttleSlip * thr * Math.abs(st)) * dt;
+  let cancel = vl * (1 - Math.exp(-P.latGrip * dt));
+  if (Math.abs(cancel) > lim) cancel = Math.sign(cancel) * lim;
+  vl -= cancel;
+  t.slide = Math.abs(vl);
+
+  t.vx = fx * vf + rx * vl;
+  t.vy = fy * vf + ry * vl;
+  t.x += t.vx * dt;
+  t.y += t.vy * dt;
+
+  // walls
+  const n = nearest(t.x, t.y);
+  const limD = HW - TRUCK_R;
+  if (n.d > limD) {
+    const ux = (t.x - n.px) / n.d, uy = (t.y - n.py) / n.d;
+    t.x = n.px + ux * limD; t.y = n.py + uy * limD;
+    const vn = t.vx * ux + t.vy * uy;
+    if (vn > 0) {
+      t.vx -= (1 + P.wallBounce) * vn * ux;
+      t.vy -= (1 + P.wallBounce) * vn * uy;
+      t.vx *= P.wallScrub; t.vy *= P.wallScrub;
+      if (vn > 12) { sfxThud(vn / P.maxSpeed); dust(t.x + ux * 4, t.y + uy * 4, 6 + vn / 10, 1.5); }
+    }
+  }
+  t.vf = vf; t.thr = thr;
+
+  // lap logic
+  const L = track.len, s = n.s;
+  if (s > L * 0.4 && s < L * 0.6) t.halfway = true;
+  if (t.prevS > L * 0.8 && s < L * 0.2) {          // crossed the line forwards
+    if (!t.timing) { t.timing = true; t.lapStart = raceTime; t.halfway = false; }
+    else if (t.halfway) {
+      const lap = raceTime - t.lapStart;
+      t.lastLap = lap; t.laps++;
+      if (!t.best || lap < t.best) { t.best = lap; store("dd_best", lap); t.newBest = 2.5; }
+      t.lapStart = raceTime; t.halfway = false;
+    }
+  } else if (t.prevS < L * 0.2 && s > L * 0.8) {   // went back over the line
+    t.halfway = false;
+  }
+  t.prevS = s;
+  if (t.newBest) t.newBest = Math.max(0, t.newBest - dt);
+
+  // tyre marks + dust from the rear wheels
+  const speed = Math.hypot(t.vx, t.vy);
+  const marking = t.slide > 22 || (brk && vf > 30);
+  for (const side of [-1, 1]) {
+    const wx = t.x - fx * 3.6 + rx * side * 3.4, wy = t.y - fy * 3.6 + ry * side * 3.4;
+    const key = side < 0 ? "wl" : "wr";
+    if (marking && t[key]) {
+      skidCtx.strokeStyle = `rgba(55,32,14,${Math.min(0.32, 0.08 + t.slide / 400)})`;
+      skidCtx.lineWidth = classic ? 1 : 1.2;
+      skidCtx.beginPath(); skidCtx.moveTo(t[key][0], t[key][1]); skidCtx.lineTo(wx, wy); skidCtx.stroke();
+    }
+    t[key] = [wx, wy];
+    const rate = (speed > 25 ? speed / 200 : 0) + t.slide / 60 + (thr && speed < 40 ? 0.25 : 0);
+    if (Math.random() < rate * dt * 30) dust(wx, wy, 1, 0.6 + t.slide / 90, -t.vx * 0.15, -t.vy * 0.15);
+  }
+}
+
+function dust(x, y, count, size, bvx = 0, bvy = 0) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y, vx: bvx + (Math.random() - 0.5) * 18, vy: bvy + (Math.random() - 0.5) * 18 - 4,
+      life: 0, max: 0.5 + Math.random() * 0.6, r: (0.8 + Math.random() * 1.2) * size
+    });
+  }
+  if (particles.length > 500) particles.splice(0, particles.length - 500);
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const q = particles[i];
+    q.life += dt;
+    if (q.life > q.max) { particles.splice(i, 1); continue; }
+    q.x += q.vx * dt; q.y += q.vy * dt;
+    q.vx *= 1 - 2.5 * dt; q.vy *= 1 - 2.5 * dt;
+  }
+}
+
+// ---------- Drawing ----------
+function rr(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y); c.lineTo(x + w - r, y); c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r); c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y); c.closePath();
+}
+
+function drawTruck(c, t) {
+  let a = t.a;
+  if (classic) a = Math.round(a / (Math.PI / 8)) * (Math.PI / 8);   // 16 directions, like the arcade sprites
+  c.save();
+  c.translate(classic ? Math.round(t.x) : t.x, classic ? Math.round(t.y) : t.y);
+  // shadow
+  c.save(); c.translate(1.3, 1.9); c.rotate(a);
+  c.fillStyle = "rgba(0,0,0,.38)"; rr(c, -6, -4.3, 12, 8.6, 2.2); c.fill();
+  c.restore();
+  c.rotate(a);
+  // wheels
+  c.fillStyle = "#151515";
+  const wheel = (x, y, ang) => { c.save(); c.translate(x, y); c.rotate(ang); c.fillRect(-1.7, -1, 3.4, 2); c.restore(); };
+  wheel(-3.6, -3.7, 0); wheel(-3.6, 3.7, 0);
+  wheel(3.4, -3.7, t.steerVis); wheel(3.4, 3.7, t.steerVis);
+  // body
+  c.fillStyle = t.color; rr(c, -5.6, -3.1, 11.4, 6.2, 1.6); c.fill();
+  if (!classic) { c.fillStyle = "rgba(255,255,255,.18)"; rr(c, -5.2, -3, 10.6, 1.6, 0.8); c.fill(); }
+  // load bed
+  c.fillStyle = t.dark; c.fillRect(-5, -2.3, 4.1, 4.6);
+  if (!classic) { c.strokeStyle = "rgba(0,0,0,.35)"; c.lineWidth = 0.3; for (let k = -1.4; k <= 1.5; k += 1.4) { c.beginPath(); c.moveTo(-4.8, k); c.lineTo(-1.1, k); c.stroke(); } }
+  // cab
+  c.fillStyle = t.light; rr(c, -0.7, -2.5, 3.4, 5, 0.9); c.fill();
+  c.fillStyle = "#9fd2ff"; c.fillRect(2.4, -2.2, 0.9, 4.4);            // windscreen
+  c.fillStyle = "#222"; c.fillRect(-1.3, -3.1, 0.6, 6.2);              // roll bar
+  c.fillStyle = "#fff4b8"; c.fillRect(5.2, -2.6, 0.6, 1.1); c.fillRect(5.2, 1.5, 0.6, 1.1);  // lights
+  c.restore();
+}
+
+function fmt(t) {
+  if (t == null) return "-:--.--";
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return m + ":" + (s < 10 ? "0" : "") + s.toFixed(2);
+}
+
+function drawHUD() {
+  const t = truck;
+  ctx.fillStyle = "rgba(10,8,6,.62)";
+  ctx.fillRect(0, 0, W, 11);
+  ctx.font = classic ? "8px monospace" : "bold 7px 'Courier New', monospace";
+  ctx.textBaseline = "middle";
+  const y = 6;
+  const cur = t.timing ? raceTime - t.lapStart : null;
+  ctx.fillStyle = "#ffc861"; ctx.fillText("PRACTICE", 4, y);
+  ctx.fillStyle = "#f2e6d0";
+  ctx.fillText("LAP " + (t.laps + (t.timing ? 1 : 0)), 52, y);
+  ctx.fillText("TIME " + fmt(cur), 92, y);
+  ctx.fillText("LAST " + fmt(t.lastLap), 162, y);
+  ctx.fillStyle = t.newBest ? (Math.floor(raceTime * 8) % 2 ? "#fff" : "#ffc861") : "#f2e6d0";
+  ctx.fillText("BEST " + fmt(t.best), 232, y);
+  // speed bar
+  const sp = Math.hypot(t.vx, t.vy) / Math.max(1, P.maxSpeed);
+  ctx.fillStyle = "rgba(10,8,6,.62)"; ctx.fillRect(W - 50, H - 9, 46, 6);
+  ctx.fillStyle = sp > 0.85 ? "#ff6a3d" : "#ffc861"; ctx.fillRect(W - 49, H - 8, 44 * Math.min(1, sp), 4);
+  if (!t.timing) {
+    ctx.fillStyle = "rgba(10,8,6,.6)"; ctx.fillRect(W / 2 - 62, H / 2 - 8, 124, 16);
+    ctx.fillStyle = "#ffc861"; ctx.textAlign = "center";
+    ctx.fillText("CROSS THE LINE TO START", W / 2, H / 2);
+    ctx.textAlign = "left";
+  }
+}
+
+function drawDebug() {
+  ctx.lineWidth = 0.4;
+  ctx.strokeStyle = "rgba(0,255,255,.6)"; trackPath(ctx); ctx.stroke();
+  const t = truck, n = nearest(t.x, t.y);
+  ctx.strokeStyle = "#0ff"; ctx.beginPath(); ctx.moveTo(t.x, t.y); ctx.lineTo(n.px, n.py); ctx.stroke();
+  ctx.strokeStyle = "#ff0"; ctx.beginPath(); ctx.moveTo(t.x, t.y); ctx.lineTo(t.x + t.vx * 0.25, t.y + t.vy * 0.25); ctx.stroke();
+  ctx.fillStyle = "#fff"; ctx.font = "6px monospace";
+  ctx.fillText(`spd ${Math.hypot(t.vx, t.vy).toFixed(0)} slide ${t.slide.toFixed(0)} s ${n.s.toFixed(0)}/${track.len.toFixed(0)}`, 4, H - 5);
+}
+
+function render() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(bg, 0, 0);
+  ctx.drawImage(skid, 0, 0);
+  ctx.setTransform(S, 0, 0, S, 0, 0);
+  for (const q of particles) {
+    const f = q.life / q.max;
+    ctx.fillStyle = `rgba(196,156,104,${0.45 * (1 - f)})`;
+    const r = q.r * (1 + f * 1.6);
+    if (classic) ctx.fillRect(Math.round(q.x), Math.round(q.y), 1, 1);
+    else { ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, 7); ctx.fill(); }
+  }
+  drawTruck(ctx, truck);
+  if (debug) drawDebug();
+  drawHUD();
+}
+
+// ---------- Sound (synth engine, skid hiss, wall thud) ----------
+let AC = null, A = {}, muted = recall("dd_muted") === true;
+function initAudio() {
+  if (AC) { if (AC.state === "suspended") AC.resume(); return; }
+  try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return; }
+  A.master = AC.createGain(); A.master.gain.value = muted ? 0 : 0.5;
+  const comp = AC.createDynamicsCompressor();
+  A.master.connect(comp); comp.connect(AC.destination);
+  A.o1 = AC.createOscillator(); A.o1.type = "sawtooth";
+  A.o2 = AC.createOscillator(); A.o2.type = "square";
+  A.lp = AC.createBiquadFilter(); A.lp.type = "lowpass"; A.lp.frequency.value = 500; A.lp.Q.value = 4;
+  A.eg = AC.createGain(); A.eg.gain.value = 0.09;
+  A.o1.connect(A.lp); A.o2.connect(A.lp); A.lp.connect(A.eg); A.eg.connect(A.master);
+  A.o1.start(); A.o2.start();
+  A.noise = AC.createBuffer(1, AC.sampleRate, AC.sampleRate);
+  const d = A.noise.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  const ns = AC.createBufferSource(); ns.buffer = A.noise; ns.loop = true;
+  A.bp = AC.createBiquadFilter(); A.bp.type = "bandpass"; A.bp.frequency.value = 1100; A.bp.Q.value = 0.7;
+  A.sg = AC.createGain(); A.sg.gain.value = 0;
+  ns.connect(A.bp); A.bp.connect(A.sg); A.sg.connect(A.master); ns.start();
+}
+function updateAudio(t) {
+  if (!AC) return;
+  const now = AC.currentTime;
+  const rpm = Math.min(1.2, Math.abs(t.vf || 0) / Math.max(1, P.maxSpeed));
+  const wob = Math.sin(now * 31) * 1.5;
+  const f = 48 + rpm * 120 + (t.thr ? 14 : 0) + wob;
+  A.o1.frequency.setTargetAtTime(f, now, 0.05);
+  A.o2.frequency.setTargetAtTime(f * 0.5, now, 0.05);
+  A.lp.frequency.setTargetAtTime(350 + rpm * 1300 + (t.thr ? 350 : 0), now, 0.06);
+  A.eg.gain.setTargetAtTime(0.06 + (t.thr ? 0.05 : 0) + rpm * 0.03, now, 0.08);
+  A.sg.gain.setTargetAtTime(Math.max(0, Math.min(1, (t.slide - 20) / 70)) * 0.22, now, 0.05);
+}
+function sfxThud(strength) {
+  if (!AC) return;
+  const now = AC.currentTime;
+  const src = AC.createBufferSource(); src.buffer = A.noise;
+  const lp = AC.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 260;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(Math.min(1, 0.3 + strength), now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+  src.connect(lp); lp.connect(g); g.connect(A.master);
+  src.start(now, Math.random() * 0.5, 0.25);
+}
+function setMuted(m) {
+  muted = m; store("dd_muted", m);
+  if (A.master) A.master.gain.setTargetAtTime(m ? 0 : 0.5, AC.currentTime, 0.02);
+}
+
+// ---------- Input ----------
+const KEYMAP = { ArrowUp: "up", KeyW: "up", ArrowDown: "down", KeyS: "down", ArrowLeft: "left", KeyA: "left", ArrowRight: "right", KeyD: "right" };
+window.addEventListener("keydown", e => {
+  initAudio();
+  const k = KEYMAP[e.code];
+  if (k) {
+    // D doubles as "steer right"; Shift+D toggles debug instead
+    if (e.code === "KeyD" && e.shiftKey) { debug = !debug; e.preventDefault(); return; }
+    keys[k] = true; e.preventDefault(); return;
+  }
+  if (e.code === "KeyR") resetTruck();
+  else if (e.code === "KeyG") { classic = !classic; store("dd_classic", classic); setMode(); }
+  else if (e.code === "KeyT") document.getElementById("tune").hidden ^= 1;
+  else if (e.code === "KeyM") setMuted(!muted);
+  else if (e.code === "Space") e.preventDefault();
+}, true);
+window.addEventListener("keyup", e => { const k = KEYMAP[e.code]; if (k) keys[k] = false; }, true);
+window.addEventListener("blur", () => { for (const k in keys) keys[k] = false; });
+
+// ---------- Tuning panel ----------
+function buildTuning() {
+  const box = document.getElementById("sliders");
+  box.innerHTML = "";
+  for (const [key, label, min, max, step] of PHYS_META) {
+    const lab = document.createElement("label");
+    const val = document.createElement("span");
+    val.textContent = P[key];
+    lab.textContent = label; lab.appendChild(val);
+    const inp = document.createElement("input");
+    Object.assign(inp, { type: "range", min, max, step, value: P[key] });
+    inp.addEventListener("input", () => { P[key] = +inp.value; val.textContent = inp.value; store("dd_phys", P); });
+    box.appendChild(lab); box.appendChild(inp);
+  }
+}
+document.getElementById("tReset").onclick = () => { Object.assign(P, PHYS_DEFAULTS); store("dd_phys", P); buildTuning(); };
+document.getElementById("tCopy").onclick = async (e) => {
+  const txt = "const PHYS_DEFAULTS = " + JSON.stringify(P, null, 2) + ";";
+  try { await navigator.clipboard.writeText(txt); e.target.textContent = "Copied!"; }
+  catch (err) { prompt("Copy these settings:", JSON.stringify(P)); }
+  setTimeout(() => e.target.textContent = "Copy settings", 1200);
+};
+
+// ---------- Main loop ----------
+setMode();
+resetTruck();
+buildTuning();
+let last = performance.now(), accT = 0;
+function frame(now) {
+  accT += Math.min(0.05, (now - last) / 1000);
+  last = now;
+  while (accT >= STEP) {
+    updateTruck(truck, STEP);
+    updateParticles(STEP);
+    raceTime += STEP;
+    accT -= STEP;
+  }
+  updateAudio(truck);
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
