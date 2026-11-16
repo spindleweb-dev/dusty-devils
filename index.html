@@ -623,7 +623,11 @@ document.getElementById("tReset").onclick = () => { Object.assign(P, PHYS_DEFAUL
 document.getElementById("tCopy").onclick = async (e) => {
   const txt = "const PHYS_DEFAULTS = " + JSON.stringify(P, null, 2) + ";";
   try { await navigator.clipboard.writeText(txt); e.target.textContent = "Copied!"; }
-  catch (err) { prompt("Copy these settings:", JSON.stringify(P)); }
+  catch (err) {   // clipboard blocked: show the text so it can be copied by hand
+    let ta = document.getElementById("tOut");
+    if (!ta) { ta = document.createElement("textarea"); ta.id = "tOut"; ta.rows = 6; ta.style.cssText = "width:100%;margin-top:8px;background:#0e0b08;color:#e8dcc6;border:1px solid #5a4630;font:11px monospace"; document.getElementById("tune").appendChild(ta); }
+    ta.value = txt; ta.select();
+  }
   setTimeout(() => e.target.textContent = "Copy settings", 1200);
 };
 
