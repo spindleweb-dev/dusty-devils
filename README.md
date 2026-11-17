@@ -18,6 +18,7 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
 
 ## Roadmap
 1. ✅ One track and one truck with drift handling and a live tuning panel
+   - ✅ 3D perspective view (three.js) from a fixed tilted camera, with camera sliders in the tuning panel
 2. Laps, checkpoints, finish order
 3. Computer drivers
 4. Hills, jumps, mud and water
