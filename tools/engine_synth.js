@@ -14,6 +14,10 @@
 //   * Each bank goes through its own exhaust-pipe resonances,
 //     the right bank slightly delayed (longer pipe), then both
 //     go through a muffler low-pass and gentle saturation.
+//   * A separate thin "tin" layer: the raw pulses ring a few
+//     narrow high resonances (2.7 / 3.9 / 5.3 kHz), like thin
+//     steel pipe and tips. It is returned on its own so the game
+//     can mix it in at any level, phase-locked to the body.
 //   * makeEngineLoop() renders a seamless loop at a fixed RPM:
 //     a whole number of engine cycles, pulses wrapped around
 //     the loop end, and the filters run over three copies so
@@ -85,6 +89,9 @@ function makeEngineLoop(sr, rpm, seed = 7) {
   const total = n * 3;
   const fil = banks.map(b => ({ bp: b.res.map(([f, q, g]) => [makeBiquad("bp", f, q, sr), g]), lp: makeBiquad("lp", 1100, 0.7, sr), delay: b.delay }));
   const muffler = makeBiquad("lp", bright, 0.9, sr);
+  const tinOut = new Float32Array(n);
+  const tinHp = makeBiquad("hp", 1600, 0.7, sr);
+  const tinBands = [[2700, 9, 1.0], [3900, 11, 0.7], [5300, 12, 0.4]].map(([f, q, g]) => [makeBiquad("bp", f, q, sr), g]);
   const muffler2 = makeBiquad("lp", bright * 1.6, 0.7, sr);
   const hp = makeBiquad("hp", 32, 0.7, sr);
   for (let i = 0; i < total; i++) {
@@ -96,6 +103,12 @@ function makeEngineLoop(sr, rpm, seed = 7) {
       for (const [f, g] of F.bp) y += f(x) * g * 2.2;
       s += y;
     }
+    // tin layer from both banks' raw pulses
+    const raw = ex[0][i % n] + ex[1][((i - fil[1].delay) % n + n) % n];
+    const h = tinHp(raw);
+    let tn = 0;
+    for (const [bf, g] of tinBands) tn += bf(h) * g;
+    if (i >= n && i < 2 * n) tinOut[i - n] = Math.tanh(tn * 1.5);
     s = hp(muffler2(muffler(s)));
     s = Math.tanh(s * drive * 0.6);
     if (i >= n && i < 2 * n) out[i - n] = s;
@@ -107,7 +120,12 @@ function makeEngineLoop(sr, rpm, seed = 7) {
   let peak = 0;
   for (let i = 0; i < n; i++) { out[i] *= g; peak = Math.max(peak, Math.abs(out[i])); }
   if (peak > 0.98) for (let i = 0; i < n; i++) out[i] *= 0.98 / peak;
-  return out;
+  // tin layer: scaled to a fixed level relative to the body (amount 1 = clearly audible)
+  let ts = 0;
+  for (let i = 0; i < n; i++) ts += tinOut[i] * tinOut[i];
+  const tg = 0.08 / Math.sqrt(ts / n || 1);
+  for (let i = 0; i < n; i++) tinOut[i] *= tg;
+  return { body: out, tin: tinOut };
 }
 
 // Given the current rpm, which two loops to blend, how much of each, and

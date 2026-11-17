@@ -1,6 +1,6 @@
 // Renders a short demo of the synthesised V8 the same way the game plays it:
 // seamless loops at fixed RPMs, blended and pitched to the current rpm.
-// Usage: node tools/render_engine_demo.mjs out.wav
+// Usage: node tools/render_engine_demo.mjs out.wav [tinAmount=0.35]
 import fs from "node:fs";
 
 const src = fs.readFileSync(new URL("./engine_synth.js", import.meta.url), "utf8");
@@ -9,6 +9,7 @@ const { ENGINE_LOOP_RPMS, makeEngineLoop, engineMix } =
   new Function(code + "; return { ENGINE_LOOP_RPMS, makeEngineLoop, engineMix };")();
 
 const sr = 44100;
+const TIN = +(process.argv[3] ?? 0.35);   // same default as the game's slider
 const loops = ENGINE_LOOP_RPMS.map(r => makeEngineLoop(sr, r));
 
 // rpm profile: idle, two blips, a run up through the revs, lift off, idle
@@ -30,20 +31,21 @@ let lp = 0, load = 0;
 for (let i = 0; i < n; i++) {
   const t = i / sr;
   const { gains, rates } = engineMix(rpmAt(t));
-  let s = 0;
+  let s = 0, tin = 0;
   for (let k = 0; k < loops.length; k++) {
-    const L = loops[k];
+    const L = loops[k].body, T = loops[k].tin;
     phase[k] = (phase[k] + rates[k]) % L.length;
     if (gains[k] < 1e-4) continue;
-    const p = phase[k], i0 = Math.floor(p), f = p - i0;
-    s += (L[i0] * (1 - f) + L[(i0 + 1) % L.length] * f) * gains[k];
+    const p = phase[k], i0 = Math.floor(p), f = p - i0, i1 = (i0 + 1) % L.length;
+    s += (L[i0] * (1 - f) + L[i1] * f) * gains[k];
+    tin += (T[i0] * (1 - f) + T[i1] * f) * gains[k];
   }
   // on/off throttle: louder and brighter on load (as the game does with a filter)
   load += ((throttleOn(t) ? 1 : 0) - load) * 0.0004;
   const cut = 1800 + load * 5000;
   const a = 1 - Math.exp(-2 * Math.PI * cut / sr);
   lp += (s - lp) * a;
-  out[i] = lp * (0.65 + load * 0.35) * 0.9;
+  out[i] = (lp * (0.65 + load * 0.35) + tin * TIN * (0.4 + load * 0.6)) * 0.9;
 }
 
 const buf = Buffer.alloc(44 + n * 2);
