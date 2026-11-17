@@ -83,26 +83,26 @@ function makeEngineLoop(sr, rpm, seed = 7) {
 
   // exhaust: each bank has its own pipe resonances
   const banks = [
-    { res: [[102, 2.6, 1.0], [236, 3.5, 0.55], [700, 4.5, 0.22]], delay: 0 },
-    { res: [[96, 2.6, 1.0], [251, 3.5, 0.55], [655, 4.5, 0.22]], delay: Math.round(0.0011 * sr) }
+    { res: [[74, 2.4, 1.25], [168, 3.2, 0.6], [520, 4.5, 0.14]], delay: 0 },
+    { res: [[69, 2.4, 1.25], [181, 3.2, 0.6], [490, 4.5, 0.14]], delay: Math.round(0.0013 * sr) }
   ];
-  const bright = 900 + rpm * 0.38;
+  const bright = 650 + rpm * 0.3;          // darker muffler = deeper tone
   const drive = 1.4 + rpm / 4000;
   const out = new Float32Array(n);
   const total = n * 3;
-  const fil = banks.map(b => ({ bp: b.res.map(([f, q, g]) => [makeBiquad("bp", f, q * (1 - 0.3 * idleness), sr), g]), lp: makeBiquad("lp", 1100, 0.7, sr), delay: b.delay }));
+  const fil = banks.map(b => ({ bp: b.res.map(([f, q, g]) => [makeBiquad("bp", f, q * (1 - 0.3 * idleness), sr), g]), lp: makeBiquad("lp", 420, 0.7, sr), delay: b.delay }));
   const muffler = makeBiquad("lp", bright, 0.9, sr);
   const tinOut = new Float32Array(n);
   const tinHp = makeBiquad("hp", 1600, 0.7, sr);
   const tinBands = [[2700, 9, 1.0], [3900, 11, 0.7], [5300, 12, 0.4]].map(([f, q, g]) => [makeBiquad("bp", f, q, sr), g]);
   const muffler2 = makeBiquad("lp", bright * 1.6, 0.7, sr);
-  const hp = makeBiquad("hp", 32, 0.7, sr);
+  const hp = makeBiquad("hp", 24, 0.7, sr);
   for (let i = 0; i < total; i++) {
     let s = 0;
     for (let b = 0; b < 2; b++) {
       const F = fil[b];
       const x = ex[b][((i - F.delay) % n + n) % n];
-      let y = F.lp(x) * 0.55;
+      let y = F.lp(x) * 1.1;                      // chesty low thump of each pulse
       for (const [f, g] of F.bp) y += f(x) * g * 2.2;
       s += y;
     }

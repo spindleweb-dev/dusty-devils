@@ -73,7 +73,7 @@ const PHYS_DEFAULTS = {
   steerRate: 3.6, steerFullSpeed: 40, latGrip: 9, latMax: 240, throttleSlip: 0.45,
   wallBounce: 0.35, wallScrub: 0.82,
   nitroSpeed: 1.45, nitroAccel: 2.6, nitroTime: 1.5, pickupEvery: 4.5,
-  exhaustTin: 0.35
+  exhaustTin: 0.35, engineBass: 7
 };
 const PHYS_META = [
   ["accel", "Acceleration", 40, 400, 5],
@@ -92,7 +92,8 @@ const PHYS_META = [
   ["nitroAccel", "Nitro push", 1, 6, 0.1],
   ["nitroTime", "Nitro burst (s)", 0.3, 4, 0.1],
   ["pickupEvery", "New pickup every (s)", 1, 15, 0.5],
-  ["exhaustTin", "Exhaust tinniness (sound)", 0, 1.5, 0.05]
+  ["exhaustTin", "Exhaust tinniness (sound)", 0, 1.5, 0.05],
+  ["engineBass", "Engine bass boost (dB)", 0, 15, 0.5]
 ];
 const P = Object.assign({}, PHYS_DEFAULTS, recall("dd_phys") || {});
 
@@ -1100,26 +1101,26 @@ function makeEngineLoop(sr, rpm, seed = 7) {
 
   // exhaust: each bank has its own pipe resonances
   const banks = [
-    { res: [[102, 2.6, 1.0], [236, 3.5, 0.55], [700, 4.5, 0.22]], delay: 0 },
-    { res: [[96, 2.6, 1.0], [251, 3.5, 0.55], [655, 4.5, 0.22]], delay: Math.round(0.0011 * sr) }
+    { res: [[74, 2.4, 1.25], [168, 3.2, 0.6], [520, 4.5, 0.14]], delay: 0 },
+    { res: [[69, 2.4, 1.25], [181, 3.2, 0.6], [490, 4.5, 0.14]], delay: Math.round(0.0013 * sr) }
   ];
-  const bright = 900 + rpm * 0.38;
+  const bright = 650 + rpm * 0.3;          // darker muffler = deeper tone
   const drive = 1.4 + rpm / 4000;
   const out = new Float32Array(n);
   const total = n * 3;
-  const fil = banks.map(b => ({ bp: b.res.map(([f, q, g]) => [makeBiquad("bp", f, q * (1 - 0.3 * idleness), sr), g]), lp: makeBiquad("lp", 1100, 0.7, sr), delay: b.delay }));
+  const fil = banks.map(b => ({ bp: b.res.map(([f, q, g]) => [makeBiquad("bp", f, q * (1 - 0.3 * idleness), sr), g]), lp: makeBiquad("lp", 420, 0.7, sr), delay: b.delay }));
   const muffler = makeBiquad("lp", bright, 0.9, sr);
   const tinOut = new Float32Array(n);
   const tinHp = makeBiquad("hp", 1600, 0.7, sr);
   const tinBands = [[2700, 9, 1.0], [3900, 11, 0.7], [5300, 12, 0.4]].map(([f, q, g]) => [makeBiquad("bp", f, q, sr), g]);
   const muffler2 = makeBiquad("lp", bright * 1.6, 0.7, sr);
-  const hp = makeBiquad("hp", 32, 0.7, sr);
+  const hp = makeBiquad("hp", 24, 0.7, sr);
   for (let i = 0; i < total; i++) {
     let s = 0;
     for (let b = 0; b < 2; b++) {
       const F = fil[b];
       const x = ex[b][((i - F.delay) % n + n) % n];
-      let y = F.lp(x) * 0.55;
+      let y = F.lp(x) * 1.1;                      // chesty low thump of each pulse
       for (const [f, g] of F.bp) y += f(x) * g * 2.2;
       s += y;
     }
@@ -1198,7 +1199,8 @@ function initAudio() {
   // engine: one looping source per RPM, mixed into a load filter
   A.engLp = AC.createBiquadFilter(); A.engLp.type = "lowpass"; A.engLp.frequency.value = 2000; A.engLp.Q.value = 0.6;
   A.engGain = AC.createGain(); A.engGain.gain.value = 0.4;
-  A.engLp.connect(A.engGain); A.engGain.connect(A.master);
+  A.engBass = AC.createBiquadFilter(); A.engBass.type = "lowshelf"; A.engBass.frequency.value = 140; A.engBass.gain.value = P.engineBass;
+  A.engLp.connect(A.engBass); A.engBass.connect(A.engGain); A.engGain.connect(A.master);
   // thin metallic "tin" layer: bypasses the load filter, has its own level
   A.tinGain = AC.createGain(); A.tinGain.gain.value = 0;
   A.tinGain.connect(A.master);
@@ -1245,7 +1247,8 @@ function updateAudio(t) {
     L.tsrc.playbackRate.setTargetAtTime(mix.rates[k], now, 0.03);
   });
   // on the throttle the engine is louder and brighter; off it, muffled
-  A.engLp.frequency.setTargetAtTime(A.load ? 6500 : 1900, now, A.load ? 0.05 : 0.1);
+  A.engLp.frequency.setTargetAtTime(A.load ? 5000 : 1500, now, A.load ? 0.05 : 0.1);
+  A.engBass.gain.setTargetAtTime(P.engineBass, now, 0.1);
   A.engGain.gain.setTargetAtTime((A.load ? 0.55 : 0.36) + A.rpm / 40000, now, 0.06);
   A.tinGain.gain.setTargetAtTime(P.exhaustTin * (A.load ? 1 : 0.4), now, 0.08);
   // lift off at high revs: a few exhaust crackles

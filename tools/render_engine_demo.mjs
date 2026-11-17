@@ -1,6 +1,6 @@
 // Renders a short demo of the synthesised V8 the same way the game plays it:
 // seamless loops at fixed RPMs, blended and pitched to the current rpm.
-// Usage: node tools/render_engine_demo.mjs out.wav [tinAmount=0.35]
+// Usage: node tools/render_engine_demo.mjs out.wav [tinAmount=0.35] [bassDb=7]
 import fs from "node:fs";
 
 const src = fs.readFileSync(new URL("./engine_synth.js", import.meta.url), "utf8");
@@ -18,6 +18,17 @@ const throttleOn = t => (t > 2.0 && t < 2.2) || (t > 3.4 && t < 3.6) || (t > 5.0
 const braking = t => t > 12.2 && t < 15.5;
 const gb = makeGearbox();
 let sp = 0;
+// RBJ low-shelf, same as the game's "Engine bass boost"
+function lowShelf(f0, dB) {
+  const A = Math.pow(10, dB / 40), w = 2 * Math.PI * f0 / sr, cs = Math.cos(w), al = Math.sin(w) / 2 * Math.SQRT2, sA = 2 * Math.sqrt(A) * al;
+  const a0 = (A + 1) + (A - 1) * cs + sA;
+  const b = [A * ((A + 1) - (A - 1) * cs + sA), 2 * A * ((A - 1) - (A + 1) * cs), A * ((A + 1) - (A - 1) * cs - sA)].map(v => v / a0);
+  const a = [-2 * ((A - 1) + (A + 1) * cs), (A + 1) + (A - 1) * cs - sA].map(v => v / a0);
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  return x => { const y = b[0] * x + b[1] * x1 + b[2] * x2 - a[0] * y1 - a[1] * y2; x2 = x1; x1 = x; y2 = y1; y1 = y; return y; };
+}
+const BASS = +(process.argv[4] ?? 7);
+const shelf = lowShelf(140, BASS);
 const dur = 18, n = dur * sr;
 const out = new Float32Array(n);
 const phase = loops.map(() => 0);
@@ -45,10 +56,10 @@ for (let i = 0; i < n; i++) {
   }
   // on/off throttle: louder and brighter on load (as the game does with a filter)
   load += (st.load - load) * 0.0012;
-  const cut = 1800 + load * 5000;
+  const cut = 1500 + load * 3500;
   const a = 1 - Math.exp(-2 * Math.PI * cut / sr);
   lp += (s - lp) * a;
-  out[i] = (lp * (0.65 + load * 0.35) + tin * TIN * (0.4 + load * 0.6)) * 0.9;
+  out[i] = (shelf(lp) * (0.65 + load * 0.35) + tin * TIN * (0.4 + load * 0.6)) * 0.55;
 }
 
 const buf = Buffer.alloc(44 + n * 2);
