@@ -24,7 +24,7 @@
 //     the middle copy is in steady state.
 // ============================================================
 // ENGINE-SYNTH-START
-const ENGINE_LOOP_RPMS = [800, 1500, 2400, 3500, 4800, 6300];
+const ENGINE_LOOP_RPMS = [720, 1500, 2400, 3500, 4800, 6300];
 
 function engineHash(a, b) {
   let h = (a * 374761393 + b * 668265263) | 0;
@@ -61,7 +61,10 @@ function makeEngineLoop(sr, rpm, seed = 7) {
 
   // excitation for each bank, wrapped so the loop is seamless
   const ex = [new Float32Array(n), new Float32Array(n)];
-  const width = Math.max(0.0016, (60 / rpm) * 0.11) * sr;   // pulse length in samples
+  // near idle, pulses are shorter and ring less, so each cylinder is heard separately
+  const idleness = Math.max(0, Math.min(1, (1500 - rpm) / 700));
+  const width = Math.max(0.0016, (60 / rpm) * (0.11 - 0.035 * idleness)) * sr;   // pulse length in samples
+  const decay = 3.2 + 1.6 * idleness;
   for (let k = 0; k < fires; k++) {
     const cyl = ORDER[k % 8];
     const bank = cyl % 2 ? 0 : 1;
@@ -71,7 +74,7 @@ function makeEngineLoop(sr, rpm, seed = 7) {
     const len = Math.ceil(width * 4);
     for (let j = 0; j < len; j++) {
       const x = j / width;
-      const shape = x < 0.18 ? x / 0.18 : Math.exp(-(x - 0.18) * 3.2);
+      const shape = x < 0.18 ? x / 0.18 : Math.exp(-(x - 0.18) * decay);
       const grit = (engineHash(k * 977 + seed, j) - 0.5) * 0.45 * Math.exp(-x * 1.6);
       const idx = ((Math.floor(start) + j) % n + n) % n;
       ex[bank][idx] += amp * (shape + grit);
@@ -87,7 +90,7 @@ function makeEngineLoop(sr, rpm, seed = 7) {
   const drive = 1.4 + rpm / 4000;
   const out = new Float32Array(n);
   const total = n * 3;
-  const fil = banks.map(b => ({ bp: b.res.map(([f, q, g]) => [makeBiquad("bp", f, q, sr), g]), lp: makeBiquad("lp", 1100, 0.7, sr), delay: b.delay }));
+  const fil = banks.map(b => ({ bp: b.res.map(([f, q, g]) => [makeBiquad("bp", f, q * (1 - 0.3 * idleness), sr), g]), lp: makeBiquad("lp", 1100, 0.7, sr), delay: b.delay }));
   const muffler = makeBiquad("lp", bright, 0.9, sr);
   const tinOut = new Float32Array(n);
   const tinHp = makeBiquad("hp", 1600, 0.7, sr);

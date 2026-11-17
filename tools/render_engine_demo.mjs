@@ -13,8 +13,8 @@ const TIN = +(process.argv[3] ?? 0.35);   // same default as the game's slider
 const loops = ENGINE_LOOP_RPMS.map(r => makeEngineLoop(sr, r));
 
 // rpm profile: idle, two blips, a run up through the revs, lift off, idle
-const keys = [[0, 800], [2.0, 800], [2.25, 3600], [2.7, 900], [3.6, 900], [3.85, 4200], [4.4, 950],
-  [5.5, 950], [9.5, 6200], [9.9, 6300], [11.2, 1100], [12.5, 820], [14, 800]];
+const keys = [[0, 720], [2.0, 720], [2.25, 3600], [2.7, 900], [3.6, 900], [3.85, 4200], [4.4, 950],
+  [5.5, 950], [9.5, 6200], [9.9, 6300], [11.2, 1100], [12.5, 740], [14, 720]];
 const throttleOn = t => (t > 2.0 && t < 2.25) || (t > 3.6 && t < 3.85) || (t > 5.5 && t < 9.9);
 function rpmAt(t) {
   for (let i = 0; i < keys.length - 1; i++) {
