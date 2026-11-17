@@ -5,32 +5,35 @@ import fs from "node:fs";
 
 const src = fs.readFileSync(new URL("./engine_synth.js", import.meta.url), "utf8");
 const code = src.split("// ENGINE-SYNTH-START")[1].split("// ENGINE-SYNTH-END")[0];
-const { ENGINE_LOOP_RPMS, makeEngineLoop, engineMix } =
-  new Function(code + "; return { ENGINE_LOOP_RPMS, makeEngineLoop, engineMix };")();
+const { ENGINE_LOOP_RPMS, makeEngineLoop, engineMix, makeGearbox, gearboxStep } =
+  new Function(code + "; return { ENGINE_LOOP_RPMS, makeEngineLoop, engineMix, makeGearbox, gearboxStep };")();
 
 const sr = 44100;
 const TIN = +(process.argv[3] ?? 0.35);   // same default as the game's slider
 const loops = ENGINE_LOOP_RPMS.map(r => makeEngineLoop(sr, r));
 
-// rpm profile: idle, two blips, a run up through the revs, lift off, idle
-const keys = [[0, 720], [2.0, 720], [2.25, 3600], [2.7, 900], [3.6, 900], [3.85, 4200], [4.4, 950],
-  [5.5, 950], [9.5, 6200], [9.9, 6300], [11.2, 1100], [12.5, 740], [14, 720]];
-const throttleOn = t => (t > 2.0 && t < 2.25) || (t > 3.6 && t < 3.85) || (t > 5.5 && t < 9.9);
-function rpmAt(t) {
-  for (let i = 0; i < keys.length - 1; i++) {
-    const [t0, r0] = keys[i], [t1, r1] = keys[i + 1];
-    if (t <= t1) { const f = (t - t0) / (t1 - t0); return r0 + (r1 - r0) * (f * f * (3 - 2 * f)); }
-  }
-  return keys[keys.length - 1][1];
-}
-
-const dur = 14, n = dur * sr;
+// drive: idle, two blips standing still, full throttle through the gears,
+// lift, brake down through the gears, idle
+const throttleOn = t => (t > 2.0 && t < 2.2) || (t > 3.4 && t < 3.6) || (t > 5.0 && t < 11.5);
+const braking = t => t > 12.2 && t < 15.5;
+const gb = makeGearbox();
+let sp = 0;
+const dur = 18, n = dur * sr;
 const out = new Float32Array(n);
 const phase = loops.map(() => 0);
 let lp = 0, load = 0;
 for (let i = 0; i < n; i++) {
   const t = i / sr;
-  const { gains, rates } = engineMix(rpmAt(t));
+  const thr = throttleOn(t);
+  if (i % 64 === 0) {
+    const dt = 64 / sr;
+    if (thr) sp += 0.42 * Math.max(0, 1 - sp / 1.0) * dt;
+    else sp -= (braking(t) ? 0.32 : 0.05) * dt;
+    sp = Math.max(0, sp);
+    var st = gearboxStep(gb, sp, thr, false, dt);
+    if (st.shifted === 1 || st.shifted === -1) console.log(t.toFixed(2) + "s shift " + (st.shifted > 0 ? "up" : "down") + " -> gear " + st.gear);
+  }
+  const { gains, rates } = engineMix(gb.rpm);
   let s = 0, tin = 0;
   for (let k = 0; k < loops.length; k++) {
     const L = loops[k].body, T = loops[k].tin;
@@ -41,7 +44,7 @@ for (let i = 0; i < n; i++) {
     tin += (T[i0] * (1 - f) + T[i1] * f) * gains[k];
   }
   // on/off throttle: louder and brighter on load (as the game does with a filter)
-  load += ((throttleOn(t) ? 1 : 0) - load) * 0.0004;
+  load += (st.load - load) * 0.0012;
   const cut = 1800 + load * 5000;
   const a = 1 - Math.exp(-2 * Math.PI * cut / sr);
   lp += (s - lp) * a;

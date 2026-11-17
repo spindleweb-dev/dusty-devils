@@ -144,4 +144,28 @@ function engineMix(rpm) {
   gains[i + 1] = Math.sin(f * Math.PI / 2);
   return { gains, rates: R.map(x => r / x) };
 }
+
+// ---- Pretend gearbox (sound only) ----
+// speed (0..1.2 of top speed) -> gear and engine rpm. Upshifts near the
+// red line with a short power cut; downshifts with a throttle blip.
+const GEAR_TOPS = [0.32, 0.55, 0.8, 1.2];   // speed reached at the red line in each gear
+function makeGearbox() { return { gear: 0, rpm: 720, cut: 0, blip: 0, shifted: 0, since: 1 }; }
+function gearboxStep(g, sp, thr, boost, dt) {
+  const inGear = i => 900 + Math.max(0, sp) / GEAR_TOPS[i] * 5300;
+  g.shifted = 0;
+  g.since += dt;
+  if (g.cut > 0) g.cut -= dt;
+  else if (thr && g.rpm > 5800 && g.gear < GEAR_TOPS.length - 1) { g.gear++; g.cut = 0.16; g.shifted = 1; g.since = 0; }
+  else if (g.gear > 0 && g.since > 0.35 && inGear(g.gear) < (thr ? 2600 : 1700)) { g.gear--; g.cut = 0.1; g.blip = 0.16; g.shifted = -1; g.since = 0; }
+  let target = inGear(g.gear);
+  if (g.gear === 0 && thr && sp < 0.12) target = Math.max(target, 2300 + sp * 9000);   // launch / wheelspin
+  if (g.gear === 0 && !thr && sp < 0.06) target = 720;                                 // clutch in, idling
+  if (boost) target += 400;
+  if (g.blip > 0) { g.blip -= dt; target += 700; }
+  target = Math.max(700, Math.min(6600, target));
+  const rate = g.cut > 0 ? 14 : target > g.rpm ? 6 : 3;
+  g.rpm += (target - g.rpm) * Math.min(1, dt * rate);
+  const load = g.blip > 0 || (thr && g.cut <= 0) ? 1 : 0;
+  return { rpm: g.rpm, load, gear: g.gear + 1, shifted: g.shifted };
+}
 // ENGINE-SYNTH-END

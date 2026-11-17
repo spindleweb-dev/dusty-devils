@@ -1011,6 +1011,7 @@ function drawHUD() {
     c.fillStyle = "#c8c8c8"; c.fillRect(bx + 1.2, by, 1.6, 2);
   }
   if (t.boost > 0) { c.fillStyle = "#7cc0ff"; c.fillText("NITRO!", W - 50, H - 14); }
+  if (A.gear) { c.fillStyle = "#f2e6d0"; c.textAlign = "right"; c.fillText("GEAR " + A.gear, W - 4, H - 14); c.textAlign = "left"; }
   // floating "+$100" pop-ups above where things were picked up
   c.textAlign = "center";
   for (const q of popups) {
@@ -1160,6 +1161,30 @@ function engineMix(rpm) {
   gains[i + 1] = Math.sin(f * Math.PI / 2);
   return { gains, rates: R.map(x => r / x) };
 }
+
+// ---- Pretend gearbox (sound only) ----
+// speed (0..1.2 of top speed) -> gear and engine rpm. Upshifts near the
+// red line with a short power cut; downshifts with a throttle blip.
+const GEAR_TOPS = [0.32, 0.55, 0.8, 1.2];   // speed reached at the red line in each gear
+function makeGearbox() { return { gear: 0, rpm: 720, cut: 0, blip: 0, shifted: 0, since: 1 }; }
+function gearboxStep(g, sp, thr, boost, dt) {
+  const inGear = i => 900 + Math.max(0, sp) / GEAR_TOPS[i] * 5300;
+  g.shifted = 0;
+  g.since += dt;
+  if (g.cut > 0) g.cut -= dt;
+  else if (thr && g.rpm > 5800 && g.gear < GEAR_TOPS.length - 1) { g.gear++; g.cut = 0.16; g.shifted = 1; g.since = 0; }
+  else if (g.gear > 0 && g.since > 0.35 && inGear(g.gear) < (thr ? 2600 : 1700)) { g.gear--; g.cut = 0.1; g.blip = 0.16; g.shifted = -1; g.since = 0; }
+  let target = inGear(g.gear);
+  if (g.gear === 0 && thr && sp < 0.12) target = Math.max(target, 2300 + sp * 9000);   // launch / wheelspin
+  if (g.gear === 0 && !thr && sp < 0.06) target = 720;                                 // clutch in, idling
+  if (boost) target += 400;
+  if (g.blip > 0) { g.blip -= dt; target += 700; }
+  target = Math.max(700, Math.min(6600, target));
+  const rate = g.cut > 0 ? 14 : target > g.rpm ? 6 : 3;
+  g.rpm += (target - g.rpm) * Math.min(1, dt * rate);
+  const load = g.blip > 0 || (thr && g.cut <= 0) ? 1 : 0;
+  return { rpm: g.rpm, load, gear: g.gear + 1, shifted: g.shifted };
+}
 // ENGINE-SYNTH-END
 
 let AC = null, A = {}, muted = recall("dd_muted") === true;
@@ -1191,7 +1216,7 @@ function initAudio() {
     g.gain.value = tg.gain.value = 0;
     return { src: mkSrc(body, A.engLp, g), tsrc: mkSrc(tin, A.tinGain, tg), g, tg };
   });
-  A.rpm = 720; A.lastT = AC.currentTime; A.prevThr = 0; A.popUntil = 0;
+  A.gb = makeGearbox(); A.rpm = 720; A.load = 0; A.lastT = AC.currentTime; A.prevThr = 0; A.popUntil = 0;
 
   // noise for skids, thuds, pops and the nitro whoosh
   A.noise = AC.createBuffer(1, AC.sampleRate, AC.sampleRate);
@@ -1208,13 +1233,10 @@ function updateAudio(t) {
   const now = AC.currentTime;
   const dt = Math.min(0.1, Math.max(0.001, now - A.lastT));
   A.lastT = now;
-  // fake rpm from road speed, with load on the throttle and a rev when spinning up from slow
+  // engine rpm from road speed through a pretend 4-speed gearbox
   const sp = Math.min(1.2, Math.abs(t.vf || 0) / Math.max(1, P.maxSpeed));
-  let target = 720 + sp * 4980;
-  if (t.thr) { target += 450; if (sp < 0.3) target = Math.max(target, 2300 + sp * 3000); }
-  if (t.boost > 0) target += 700;
-  target = Math.min(6600, target);
-  A.rpm += (target - A.rpm) * Math.min(1, dt * (target > A.rpm ? 5 : 2.8));
+  const gs = gearboxStep(A.gb, sp, !!t.thr, t.boost > 0, dt);
+  A.rpm = gs.rpm; A.load = gs.load; A.gear = gs.gear;
   const mix = engineMix(A.rpm + Math.sin(now * 9) * 12);
   A.loops.forEach((L, k) => {
     L.g.gain.setTargetAtTime(mix.gains[k], now, 0.03);
@@ -1223,12 +1245,12 @@ function updateAudio(t) {
     L.tsrc.playbackRate.setTargetAtTime(mix.rates[k], now, 0.03);
   });
   // on the throttle the engine is louder and brighter; off it, muffled
-  A.engLp.frequency.setTargetAtTime(t.thr ? 6500 : 1900, now, t.thr ? 0.05 : 0.12);
-  A.engGain.gain.setTargetAtTime((t.thr ? 0.55 : 0.36) + A.rpm / 40000, now, 0.08);
-  A.tinGain.gain.setTargetAtTime(P.exhaustTin * (t.thr ? 1 : 0.4), now, 0.08);
+  A.engLp.frequency.setTargetAtTime(A.load ? 6500 : 1900, now, A.load ? 0.05 : 0.1);
+  A.engGain.gain.setTargetAtTime((A.load ? 0.55 : 0.36) + A.rpm / 40000, now, 0.06);
+  A.tinGain.gain.setTargetAtTime(P.exhaustTin * (A.load ? 1 : 0.4), now, 0.08);
   // lift off at high revs: a few exhaust crackles
-  if (A.prevThr && !t.thr && A.rpm > 3000) A.popUntil = now + 0.8;
-  A.prevThr = t.thr;
+  if (A.prevThr && !A.load && A.rpm > 3000) A.popUntil = now + (gs.shifted ? 0.2 : 0.8);   // crackles on lift and on upshifts
+  A.prevThr = A.load;
   if (now < A.popUntil && Math.random() < 0.14) sfxPop();
   A.sg.gain.setTargetAtTime(Math.max(0, Math.min(1, (t.slide - 20) / 70)) * 0.22, now, 0.05);
 }
