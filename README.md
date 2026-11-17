@@ -27,3 +27,9 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
 5. Nitro and pickups
 6. Shop and upgrades, more tracks, reverse tracks
 7. Polish: CRT mode, particles, sound, 2 players
+
+## Sounds
+- Engine: a 1-second idle loop cut from "Big Block V8 Rev" (Freesound community, via Pixabay), pitched with speed.
+- Nitro: trimmed "Nitro Activation" (Freesound community, via Pixabay).
+
+If the recordings can't be decoded, the game falls back to synthesised engine and whoosh sounds.
