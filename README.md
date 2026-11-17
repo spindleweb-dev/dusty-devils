@@ -29,7 +29,7 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
 7. Polish: CRT mode, particles, sound, 2 players
 
 ## Sounds
-- Engine: a 1-second idle loop cut from "Big Block V8 Rev" (Freesound community, via Pixabay), pitched with speed.
-- Nitro: trimmed "Nitro Activation" (Freesound community, via Pixabay).
-
-If the recordings can't be decoded, the game falls back to synthesised engine and whoosh sounds.
+All sounds are synthesised in code, with no recordings.
+- **Engine:** `tools/engine_synth.js` models a cross-plane V8 (firing order 1-8-4-3-6-5-7-2, uneven pulses per bank, exhaust-pipe resonances, muffler and saturation). It renders seamless loops at 800–6300 rpm, which the game blends and re-pitches to the current rpm. Lifting off at high revs gives a few exhaust crackles.
+- Hear it without the game: `node tools/render_engine_demo.mjs demo.wav` (or play `tools/engine_demo.mp3`).
+- **Nitro:** a low thump plus a rising whoosh. Skids, wall thuds and pickup chimes are also synthesised.
