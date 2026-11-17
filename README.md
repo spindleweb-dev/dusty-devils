@@ -10,6 +10,7 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
 | ↑ / W | Accelerate |
 | ↓ / S | Brake / reverse |
 | ← → / A D | Steer |
+| Space | Nitro burst |
 | R | Reset truck |
 | G | Classic (1×, 16-direction sprites) / Enhanced (4×) graphics |
 | T | Handling tuning panel |
@@ -19,6 +20,7 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
 ## Roadmap
 1. ✅ One track and one truck with drift handling and a live tuning panel
    - ✅ 3D perspective view (three.js) from a fixed tilted camera, with camera sliders in the tuning panel
+   - ✅ Nitro (Space) plus nitro-bottle and cash pickups
 2. Laps, checkpoints, finish order
 3. Computer drivers
 4. Hills, jumps, mud and water

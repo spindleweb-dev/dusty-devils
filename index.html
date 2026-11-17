@@ -37,7 +37,7 @@
     <div id="err"></div>
   </div>
   <div id="help">
-    <b>↑/W</b> accelerate · <b>↓/S</b> brake / reverse · <b>←→ / A D</b> steer ·
+    <b>↑/W</b> accelerate · <b>↓/S</b> brake / reverse · <b>←→ / A D</b> steer · <b>Space</b> nitro ·
     <b>R</b> reset · <b>G</b> classic/enhanced · <b>T</b> tuning · <b>Shift+D</b> debug · <b>M</b> sound
   </div>
 </div>
@@ -71,7 +71,8 @@ function recall(k) { try { const s = localStorage.getItem(k); return s ? JSON.pa
 const PHYS_DEFAULTS = {
   accel: 150, maxSpeed: 118, reverseMax: 45, brake: 260, rollDrag: 0.35,
   steerRate: 3.6, steerFullSpeed: 40, latGrip: 9, latMax: 240, throttleSlip: 0.45,
-  wallBounce: 0.35, wallScrub: 0.82
+  wallBounce: 0.35, wallScrub: 0.82,
+  nitroSpeed: 1.45, nitroAccel: 2.6, nitroTime: 1.5, pickupEvery: 4.5
 };
 const PHYS_META = [
   ["accel", "Acceleration", 40, 400, 5],
@@ -85,7 +86,11 @@ const PHYS_META = [
   ["latMax", "Grip limit (lower = drift)", 40, 800, 5],
   ["throttleSlip", "Power-slide on throttle", 0, 0.95, 0.05],
   ["wallBounce", "Wall bounce", 0, 1, 0.05],
-  ["wallScrub", "Speed kept on wall hit", 0.3, 1, 0.01]
+  ["wallScrub", "Speed kept on wall hit", 0.3, 1, 0.01],
+  ["nitroSpeed", "Nitro top-speed boost", 1, 2.5, 0.05],
+  ["nitroAccel", "Nitro push", 1, 6, 0.1],
+  ["nitroTime", "Nitro burst (s)", 0.3, 4, 0.1],
+  ["pickupEvery", "New pickup every (s)", 1, 15, 0.5]
 ];
 const P = Object.assign({}, PHYS_DEFAULTS, recall("dd_phys") || {});
 
@@ -447,6 +452,8 @@ function makeTruckModel(c) {
   for (const z of [-2.2, 2.2]) add(new THREE.BoxGeometry(0.35, 3.2, 0.35), black, -0.6, 4.9, z);
   add(new THREE.BoxGeometry(0.35, 0.35, 4.75), black, -0.6, 6.4, 0);
   for (const z of [-1.5, -0.5, 0.5, 1.5]) add(new THREE.BoxGeometry(0.4, 0.5, 0.6), mat("#fff3b0", { emissive: "#806a20" }), -0.35, 6.75, z);
+  // exhaust pipe (nitro flames come out here)
+  { const ex = add(new THREE.CylinderGeometry(0.35, 0.35, 1.2, 6), chrome, -5.6, 2.2, 1.9); ex.rotation.z = Math.PI / 2; }
   // headlights
   for (const z of [-2.0, 2.0]) add(new THREE.BoxGeometry(0.3, 0.6, 0.9), mat("#fff8d0", { emissive: "#b0a060" }), 5.35, 3.0, z);
   // racing stripe + number panel on the doors
@@ -542,6 +549,56 @@ dustPts.frustumCulled = false;
 dustPts.renderOrder = 2;
 scene.add(dustPts);
 
+// nitro flames: same idea as dust, glowing and additive
+const FLAME_MAX = 300;
+const flamePos = new Float32Array(FLAME_MAX * 3), flameSize = new Float32Array(FLAME_MAX), flameAlpha = new Float32Array(FLAME_MAX);
+const flameGeo = new THREE.BufferGeometry();
+flameGeo.setAttribute("position", new THREE.BufferAttribute(flamePos, 3).setUsage(THREE.DynamicDrawUsage));
+flameGeo.setAttribute("size", new THREE.BufferAttribute(flameSize, 1).setUsage(THREE.DynamicDrawUsage));
+flameGeo.setAttribute("alpha", new THREE.BufferAttribute(flameAlpha, 1).setUsage(THREE.DynamicDrawUsage));
+const flameMat = dustMat.clone();
+flameMat.blending = THREE.AdditiveBlending;
+flameMat.uniforms.uColor.value = new THREE.Color("#ff9a3a");
+const flamePts = new THREE.Points(flameGeo, flameMat);
+flamePts.frustumCulled = false;
+flamePts.renderOrder = 3;
+scene.add(flamePts);
+const flames = [];
+
+// ---------- Pickups: nitro bottles and stacks of cash ----------
+function makePickupModel(kind) {
+  const g = new THREE.Group();
+  const spin = new THREE.Group();
+  g.add(spin);
+  const m = (color, extra = {}) => new THREE.MeshLambertMaterial(Object.assign({ color }, extra));
+  const add = (geo, mat, x, y, z) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); o.castShadow = true; spin.add(o); return o; };
+  if (kind === "nitro") {
+    add(new THREE.CylinderGeometry(1.5, 1.5, 4.6, 12), m("#2f6fe0", { emissive: "#0b2a66" }), 0, 3.3, 0);       // tank
+    add(new THREE.SphereGeometry(1.5, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), m("#2f6fe0", { emissive: "#0b2a66" }), 0, 5.6, 0);
+    add(new THREE.CylinderGeometry(1.55, 1.55, 0.9, 12), m("#e8e8e8"), 0, 3.5, 0);                            // label band
+    add(new THREE.CylinderGeometry(0.45, 0.45, 1.0, 8), m("#c8c8c8"), 0, 7.0, 0);                             // valve
+    add(new THREE.BoxGeometry(1.8, 0.35, 0.35), m("#d8342c"), 0, 7.5, 0);                                     // handle
+  } else {
+    const bills = m("#3f9a4a"), band = m("#f2e7c4");
+    for (let i = 0; i < 4; i++) {
+      const b = add(new THREE.BoxGeometry(5.2, 0.9, 2.6), bills, (i % 2) * 0.3 - 0.15, 1.0 + i * 0.95, (i % 2) * -0.2);
+      b.rotation.y = (i % 2) * 0.12;
+    }
+    add(new THREE.BoxGeometry(1.0, 3.9, 2.7), band, 0, 2.45, 0);                                               // paper band
+    add(new THREE.BoxGeometry(1.4, 0.2, 1.4), m("#2b6e33"), 0, 4.95, 0);                                       // "$" seal
+  }
+  // glow ring on the ground so it reads from far away
+  const ring = new THREE.Mesh(new THREE.RingGeometry(3.4, 4.4, 24),
+    new THREE.MeshBasicMaterial({ color: kind === "nitro" ? "#6fb4ff" : "#ffe27a", transparent: true, opacity: 0.55, depthWrite: false }));
+  ring.rotation.x = -Math.PI / 2; ring.position.y = 0.08;
+  g.add(ring);
+  g.userData = { spin, ring };
+  return g;
+}
+const pickups = [];
+let pickupTimer = 2;
+const PICKUP_LIFE = 10;
+
 // ---------- Debug centreline ----------
 const debugLine = new THREE.LineLoop(
   new THREE.BufferGeometry().setFromPoints(track.pts.map(p => new THREE.Vector3(p.x, 0.3, p.y))),
@@ -569,6 +626,7 @@ function setMode() {
   if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.needsUpdate = true); });
   dustMat.uniforms.uHard.value = classic ? 1 : 0;
+  flameMat.uniforms.uHard.value = classic ? 1 : 0;
   resize();
 }
 
@@ -588,6 +646,7 @@ function resize() {
   hctx.imageSmoothingEnabled = !classic;
   fitCamera();
   dustMat.uniforms.uScale.value = h / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+  flameMat.uniforms.uScale.value = dustMat.uniforms.uScale.value;
 }
 window.addEventListener("resize", resize);
 
@@ -650,14 +709,24 @@ function resetTruck() {
     x: p.x, y: p.y, a: Math.atan2(p.ty, p.tx), vx: 0, vy: 0, steerVis: 0, slide: 0,
     timing: false, lapStart: 0, laps: 0, halfway: false, lastLap: null,
     best: recall("dd_best"), prevS: nearest(p.x, p.y).s,
+    nitros: 3, boost: 0, cash: recall("dd_cash") || 0,
     roll: 0, pitch: 0, wheelRot: 0, vf: 0, thr: 0, wl: null, wr: null, latAcc: 0, lonAcc: 0
   });
   clearSkids();
   particles.length = 0;
+  flames.length = 0;
+  for (const pk of pickups) scene.remove(pk.obj);
+  pickups.length = 0;
+  pickupTimer = 2;
+  popups.length = 0;
 }
 
 function updateTruck(t, dt) {
-  const thr = keys.up ? 1 : 0;
+  if (t.boost > 0) t.boost = Math.max(0, t.boost - dt);
+  const boosting = t.boost > 0;
+  const thr = keys.up || boosting ? 1 : 0;
+  const topSpeed = P.maxSpeed * (boosting ? P.nitroSpeed : 1);
+  const accel = P.accel * (boosting ? P.nitroAccel : 1);
   const brk = keys.down ? 1 : 0;
   const st = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
 
@@ -675,7 +744,7 @@ function updateTruck(t, dt) {
 
   if (thr) {
     if (vf < 0) vf += P.brake * dt;
-    else vf += P.accel * Math.max(0, 1 - vf / P.maxSpeed) * dt;
+    else vf += accel * Math.max(0, 1 - vf / topSpeed) * dt;
   }
   if (brk) {
     if (vf > 0) vf = Math.max(0, vf - P.brake * dt);
@@ -733,6 +802,18 @@ function updateTruck(t, dt) {
   if (t.newBest) t.newBest = Math.max(0, t.newBest - dt);
   if (t.bump) t.bump = Math.max(0, t.bump - dt * 3);
 
+  // nitro flames out of the exhaust
+  if (boosting) {
+    const ex = t.x - fx * 6.3 + rx * 1.9, ey = t.y - fy * 6.3 + ry * 1.9;
+    for (let k = 0; k < 3; k++) flames.push({
+      x: ex, y: ey, h: 2.2, vx: t.vx * 0.6 - fx * (30 + Math.random() * 30) + (Math.random() - .5) * 10,
+      vy: t.vy * 0.6 - fy * (30 + Math.random() * 30) + (Math.random() - .5) * 10, vh: Math.random() * 3,
+      life: 0, max: 0.15 + Math.random() * 0.15, r: 1.6 + Math.random()
+    });
+    if (flames.length > FLAME_MAX) flames.splice(0, flames.length - FLAME_MAX);
+  }
+  updatePickups(t, dt);
+
   // tyre marks + dust from the rear wheels
   const speed = Math.hypot(t.vx, t.vy);
   const marking = t.slide > 22 || (brk && vf > 30);
@@ -756,7 +837,67 @@ function dust(x, y, count, size, bvx = 0, bvy = 0) {
   if (particles.length > DUST_MAX) particles.splice(0, particles.length - DUST_MAX);
 }
 
+function fireNitro() {
+  const t = truck;
+  if (t.nitros <= 0 || t.boost > 0) return;
+  t.nitros--;
+  t.boost = P.nitroTime;
+  sfxNitro();
+}
+
+function spawnPickup() {
+  const t = truck;
+  for (let tries = 0; tries < 30; tries++) {
+    const p = track.pts[(Math.random() * track.pts.length) | 0];
+    const off = (Math.random() - 0.5) * (HW - 6) * 2;
+    const x = p.x - p.ty * off, y = p.y + p.tx * off;
+    if (Math.hypot(x - t.x, y - t.y) < 45) continue;
+    if (pickups.some(q => Math.hypot(q.x - x, q.y - y) < 30)) continue;
+    if (Math.hypot(x - track.pts[0].x, y - track.pts[0].y) < 10) continue;   // keep the start line clear
+    const kind = Math.random() < 0.4 ? "nitro" : "cash";
+    const value = kind === "cash" ? [50, 100, 100, 200, 500][(Math.random() * 5) | 0] : 1;
+    const obj = makePickupModel(kind);
+    obj.position.set(x, 0, y);
+    obj.scale.setScalar(0.01);
+    scene.add(obj);
+    pickups.push({ kind, value, x, y, age: 0, obj, phase: Math.random() * 6 });
+    return;
+  }
+}
+
+function updatePickups(t, dt) {
+  pickupTimer -= dt;
+  if (pickupTimer <= 0 && pickups.length < 3) {
+    spawnPickup();
+    pickupTimer = P.pickupEvery * (0.6 + Math.random() * 0.8);
+  }
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    const q = pickups[i];
+    q.age += dt;
+    const got = Math.hypot(q.x - t.x, q.y - t.y) < 8.5;
+    if (got || q.age > PICKUP_LIFE) {
+      scene.remove(q.obj);
+      pickups.splice(i, 1);
+      if (got) {
+        if (q.kind === "nitro") { t.nitros = Math.min(9, t.nitros + 1); popup("+1 NITRO", q.x, q.y, "#7cc0ff"); }
+        else { t.cash += q.value; store("dd_cash", t.cash); popup("+$" + q.value, q.x, q.y, "#ffe27a"); }
+        sfxPickup(q.kind);
+      }
+    }
+  }
+}
+
+const popups = [];
+function popup(text, x, y, color) { popups.push({ text, x, y, color, t: 0 }); }
+
 function updateParticles(dt) {
+  for (let i = flames.length - 1; i >= 0; i--) {
+    const q = flames[i];
+    q.life += dt;
+    if (q.life > q.max) { flames.splice(i, 1); continue; }
+    q.x += q.vx * dt; q.y += q.vy * dt; q.h += q.vh * dt;
+  }
+  for (let i = popups.length - 1; i >= 0; i--) { popups[i].t += dt; if (popups[i].t > 1.2) popups.splice(i, 1); }
   for (let i = particles.length - 1; i >= 0; i--) {
     const q = particles[i];
     q.life += dt;
@@ -797,6 +938,28 @@ function syncScene(dt) {
     i++;
   }
   dustGeo.setDrawRange(0, i);
+  let j = 0;
+  for (const q of flames) {
+    const f = q.life / q.max;
+    flamePos[j * 3] = q.x; flamePos[j * 3 + 1] = q.h; flamePos[j * 3 + 2] = q.y;
+    flameSize[j] = q.r * (1 - f * 0.5) * 2.4;
+    flameAlpha[j] = 0.9 * (1 - f);
+    j++;
+  }
+  flameGeo.setDrawRange(0, j);
+  flameGeo.attributes.position.needsUpdate = true;
+  flameGeo.attributes.size.needsUpdate = true;
+  flameGeo.attributes.alpha.needsUpdate = true;
+  for (const q of pickups) {
+    const grow = Math.min(1, q.age * 4);
+    q.obj.scale.setScalar(grow * 1.6 * (1 + 0.04 * Math.sin(raceTime * 6 + q.phase)));
+    const { spin, ring } = q.obj.userData;
+    spin.rotation.y = raceTime * 2 + q.phase;
+    spin.position.y = 0.6 + Math.sin(raceTime * 4 + q.phase) * 0.5;
+    ring.material.opacity = 0.35 + 0.25 * Math.sin(raceTime * 6 + q.phase);
+    // blink before vanishing
+    q.obj.visible = q.age < PICKUP_LIFE - 2 || Math.floor(q.age * 8) % 2 === 0;
+  }
   dustGeo.attributes.position.needsUpdate = true;
   dustGeo.attributes.size.needsUpdate = true;
   dustGeo.attributes.alpha.needsUpdate = true;
@@ -834,7 +997,28 @@ function drawHUD() {
   c.fillText("BEST " + fmt(t.best), 232, y);
   const sp = Math.hypot(t.vx, t.vy) / Math.max(1, P.maxSpeed);
   c.fillStyle = "rgba(10,8,6,.62)"; c.fillRect(W - 50, H - 9, 46, 6);
-  c.fillStyle = sp > 0.85 ? "#ff6a3d" : "#ffc861"; c.fillRect(W - 49, H - 8, 44 * Math.min(1, sp), 4);
+  c.fillStyle = t.boost > 0 ? "#7cc0ff" : sp > 0.85 ? "#ff6a3d" : "#ffc861"; c.fillRect(W - 49, H - 8, 44 * Math.min(1, sp / (t.boost > 0 ? P.nitroSpeed : 1)), 4);
+  // cash + nitro bottles, bottom left
+  c.fillStyle = "rgba(10,8,6,.62)"; c.fillRect(3, H - 13, 46 + Math.max(3, t.nitros) * 6, 11);
+  c.font = classic ? "8px monospace" : "bold 7px 'Courier New', monospace";
+  c.fillStyle = "#ffe27a"; c.fillText("$" + t.cash, 6, H - 7);
+  for (let k = 0; k < t.nitros; k++) {
+    const bx = 46 + k * 6, by = H - 12;
+    c.fillStyle = "#2f6fe0"; c.fillRect(bx, by + 2, 4, 7);
+    c.fillStyle = "#e8e8e8"; c.fillRect(bx, by + 4.5, 4, 1.5);
+    c.fillStyle = "#c8c8c8"; c.fillRect(bx + 1.2, by, 1.6, 2);
+  }
+  if (t.boost > 0) { c.fillStyle = "#7cc0ff"; c.fillText("NITRO!", W - 50, H - 14); }
+  // floating "+$100" pop-ups above where things were picked up
+  c.textAlign = "center";
+  for (const q of popups) {
+    const v = new THREE.Vector3(q.x, 8 + q.t * 10, q.y).project(camera);
+    const sx = (v.x + 1) / 2 * W, sy = (1 - v.y) / 2 * H;
+    c.globalAlpha = Math.min(1, 2.4 - q.t * 2);
+    c.fillStyle = "rgba(0,0,0,.6)"; c.fillText(q.text, sx + 0.6, sy + 0.6);
+    c.fillStyle = q.color; c.fillText(q.text, sx, sy);
+  }
+  c.globalAlpha = 1; c.textAlign = "left";
   if (!t.timing) {
     c.fillStyle = "rgba(10,8,6,.6)"; c.fillRect(W / 2 - 62, H / 2 - 8, 124, 16);
     c.fillStyle = "#ffc861"; c.textAlign = "center";
@@ -874,12 +1058,37 @@ function updateAudio(t) {
   if (!AC) return;
   const now = AC.currentTime;
   const rpm = Math.min(1.2, Math.abs(t.vf || 0) / Math.max(1, P.maxSpeed));
-  const f = 48 + rpm * 120 + (t.thr ? 14 : 0) + Math.sin(now * 31) * 1.5;
+  const f = 48 + rpm * 120 + (t.thr ? 14 : 0) + (t.boost > 0 ? 30 : 0) + Math.sin(now * 31) * 1.5;
   A.o1.frequency.setTargetAtTime(f, now, 0.05);
   A.o2.frequency.setTargetAtTime(f * 0.5, now, 0.05);
   A.lp.frequency.setTargetAtTime(350 + rpm * 1300 + (t.thr ? 350 : 0), now, 0.06);
   A.eg.gain.setTargetAtTime(0.06 + (t.thr ? 0.05 : 0) + rpm * 0.03, now, 0.08);
   A.sg.gain.setTargetAtTime(Math.max(0, Math.min(1, (t.slide - 20) / 70)) * 0.22, now, 0.05);
+}
+function sfxNitro() {
+  if (!AC) return;
+  const now = AC.currentTime, len = P.nitroTime;
+  const src = AC.createBufferSource(); src.buffer = A.noise; src.loop = true;
+  const bp = AC.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 1.2;
+  bp.frequency.setValueAtTime(300, now); bp.frequency.exponentialRampToValueAtTime(2400, now + len * 0.7);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.001, now); g.gain.exponentialRampToValueAtTime(0.5, now + 0.08);
+  g.gain.setValueAtTime(0.5, now + len * 0.8); g.gain.exponentialRampToValueAtTime(0.001, now + len + 0.2);
+  src.connect(bp); bp.connect(g); g.connect(A.master);
+  src.start(now); src.stop(now + len + 0.25);
+}
+function sfxPickup(kind) {
+  if (!AC) return;
+  const now = AC.currentTime;
+  const notes = kind === "nitro" ? [523, 784, 1046] : [880, 1175, 1568, 1760];
+  notes.forEach((fq, i) => {
+    const o = AC.createOscillator(); o.type = kind === "nitro" ? "triangle" : "square";
+    const g = AC.createGain();
+    const t0 = now + i * 0.06;
+    o.frequency.value = fq;
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.12, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+    o.connect(g); g.connect(A.master); o.start(t0); o.stop(t0 + 0.14);
+  });
 }
 function sfxThud(strength) {
   if (!AC) return;
@@ -910,7 +1119,7 @@ window.addEventListener("keydown", e => {
   else if (e.code === "KeyG") { classic = !classic; store("dd_classic", classic); setMode(); }
   else if (e.code === "KeyT") document.getElementById("tune").hidden ^= 1;
   else if (e.code === "KeyM") setMuted(!muted);
-  else if (e.code === "Space") e.preventDefault();
+  else if (e.code === "Space") { e.preventDefault(); if (!e.repeat) fireNitro(); }
 }, true);
 window.addEventListener("keyup", e => { const k = KEYMAP[e.code]; if (k) keys[k] = false; }, true);
 window.addEventListener("blur", () => { for (const k in keys) keys[k] = false; });
@@ -950,7 +1159,7 @@ setMode();
 resetTruck();
 buildTuning();
 buildCam();
-window.DD = { truck, keys, nearest, track, camera, CAM };   // handy for testing in the console
+window.DD = { truck, keys, nearest, track, camera, CAM, pickups, fireNitro };   // handy for testing in the console
 let last = performance.now(), accT = 0;
 function frame(now) {
   const real = Math.min(0.05, (now - last) / 1000);
