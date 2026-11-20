@@ -3026,7 +3026,7 @@ document.getElementById("tCopy").onclick = async (e) => {
 // the start line with your driver and two crew members (team uniforms, one
 // with a grid umbrella, one with a flag). Logo, track picker and menu are HTML
 // laid over the top.
-const titleState = { active: false, t: 0, staged: false, people: [], props: [], saved: null };
+const titleState = { active: false, t: 0, staged: false, people: [], props: [], heroes: [], saved: null };
 function selectTrack(id) {
   store("dd_track", ((id % TRACKS.length) + TRACKS.length) % TRACKS.length);
   location.reload();
@@ -3039,6 +3039,179 @@ function skyTexture() {
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+// ---------- Title-screen hero characters ----------
+// Detailed, smooth-shaded people used only on the title screen: rounded body
+// parts (capsules / spheres) in a jointed hierarchy, painted faces, hair,
+// hands and shoes, and team clothing drawn onto the torso. All original.
+function heroCanvas(w, h, draw) {
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  draw(c.getContext("2d"), w, h);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+// face painted onto the head sphere: the front of a three.js sphere is at u = 0.25
+function faceTexture(skin, o = {}) {
+  return heroCanvas(512, 256, (x, W, H) => {
+    x.fillStyle = skin; x.fillRect(0, 0, W, H);
+    const cx = W * 0.25, cy = H * 0.5;
+    const g = x.createRadialGradient(cx, cy, 10, cx, cy, 150);
+    g.addColorStop(0, "rgba(255,255,255,0.10)"); g.addColorStop(1, "rgba(0,0,0,0.10)");
+    x.fillStyle = g; x.fillRect(0, 0, W, H);
+    x.fillStyle = "rgba(225,110,110,0.18)";                                  // cheeks
+    for (const s of [-1, 1]) { x.beginPath(); x.ellipse(cx + s * 30, cy + 22, 13, 8, 0, 0, 7); x.fill(); }
+    if (o.shades) {
+      x.fillStyle = "#15191e";
+      for (const s of [-1, 1]) { x.beginPath(); x.ellipse(cx + s * 19, cy - 6, 15, 10, 0, 0, 7); x.fill(); }
+      x.fillRect(cx - 6, cy - 9, 12, 3);
+      x.fillStyle = "rgba(255,255,255,0.35)";
+      for (const s of [-1, 1]) { x.beginPath(); x.ellipse(cx + s * 19 - 5, cy - 10, 5, 2.5, -0.4, 0, 7); x.fill(); }
+    } else {
+      for (const s of [-1, 1]) {
+        x.fillStyle = "#ffffff"; x.beginPath(); x.ellipse(cx + s * 19, cy - 6, 9, 6, 0, 0, 7); x.fill();
+        x.fillStyle = o.eyes || "#5a3b22"; x.beginPath(); x.arc(cx + s * 19, cy - 6, 4.6, 0, 7); x.fill();
+        x.fillStyle = "#111"; x.beginPath(); x.arc(cx + s * 19, cy - 6, 2.2, 0, 7); x.fill();
+        x.fillStyle = "#fff"; x.beginPath(); x.arc(cx + s * 19 + 1.5, cy - 7.5, 1.2, 0, 7); x.fill();
+        x.strokeStyle = "rgba(40,25,15,0.65)"; x.lineWidth = 1.4;
+        x.beginPath(); x.ellipse(cx + s * 19, cy - 6, 9, 6, 0, Math.PI * 1.05, Math.PI * 1.95); x.stroke();
+      }
+    }
+    x.strokeStyle = o.brows || "#3a2614"; x.lineWidth = 3.2; x.lineCap = "round";   // eyebrows
+    for (const s of [-1, 1]) { x.beginPath(); x.moveTo(cx + s * 11, cy - 19); x.quadraticCurveTo(cx + s * 19, cy - 23, cx + s * 28, cy - 19); x.stroke(); }
+    x.strokeStyle = "rgba(90,50,30,0.35)"; x.lineWidth = 2;                         // nose
+    x.beginPath(); x.moveTo(cx + 2, cy - 2); x.quadraticCurveTo(cx + 5, cy + 10, cx - 2, cy + 12); x.stroke();
+    x.strokeStyle = o.lips || "#a8503f"; x.lineWidth = 3;                             // smile
+    x.beginPath(); x.moveTo(cx - 12, cy + 22); x.quadraticCurveTo(cx, cy + 31, cx + 12, cy + 22); x.stroke();
+  });
+}
+// clothing painted around the torso capsule (front at u = 0.5 because the mesh is turned round)
+function shirtTexture(o) {
+  return heroCanvas(512, 256, (x, W, H) => {
+    x.fillStyle = o.base; x.fillRect(0, 0, W, H);
+    if (o.side) { x.fillStyle = o.side; for (const u of [0.25, 0.75]) x.fillRect(u * W - 9, 0, 18, H); }
+    if (o.collar) { x.fillStyle = o.collar; x.fillRect(0, H * 0.06, W, 12); x.fillRect(W * 0.5 - 4, H * 0.06, 8, 46); }
+    if (o.belt) { x.fillStyle = o.belt; x.fillRect(0, H * 0.78, W, 10); }
+    if (o.logo) {
+      x.textAlign = "center"; x.textBaseline = "middle";
+      x.fillStyle = o.logo; x.font = "900 22px 'Arial Black', sans-serif";
+      x.fillText("DUSTY", W * 0.5, H * 0.3); x.fillText("DEVILS", W * 0.5, H * 0.42);
+    }
+    if (o.patch) { x.fillStyle = o.patch; x.fillRect(W * 0.5 + 34, H * 0.55, 30, 16); x.fillRect(W * 0.5 - 64, H * 0.55, 30, 16); }
+  });
+}
+function makeHero(o) {
+  const std = (c, extra = {}) => new THREE.MeshStandardMaterial(Object.assign({ color: c, roughness: 0.65, metalness: 0 }, extra));
+  const add = (parent, geo, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; parent.add(m); return m; };
+  const joint = (parent, x, y, z) => { const g = new THREE.Group(); g.position.set(x, y, z); parent.add(g); return g; };
+  const skin = std(o.skin, { roughness: 0.55 });
+  const top = std("#ffffff", { map: shirtTexture(o.shirt), roughness: 0.75 });
+  const sleeve = std(o.shirt.base, { roughness: 0.75 });
+  const pants = std(o.pants, { roughness: 0.8 });
+  const shoe = std(o.shoes || "#1b1b1b", { roughness: 0.5 });
+  const handMat = o.gloves ? std(o.gloves, { roughness: 0.5 }) : skin;
+  const root = new THREE.Group(); root.scale.setScalar(1.3);
+  const hips = joint(root, 0, 2.05, 0);
+  const legs = [], arms = [];
+  for (const s of [1, -1]) {
+    const hip = joint(hips, s * 0.24, -0.02, 0);
+    add(hip, new THREE.CapsuleGeometry(0.24, 0.58, 6, 14), pants, 0, -0.44, 0);
+    const knee = joint(hip, 0, -0.95, 0);
+    add(knee, new THREE.CapsuleGeometry(0.2, 0.6, 6, 14), pants, 0, -0.44, 0);
+    const foot = add(knee, new THREE.CapsuleGeometry(0.15, 0.36, 4, 10).rotateX(Math.PI / 2), shoe, 0, -0.94, 0.12);
+    foot.scale.set(1.1, 0.8, 1);
+    legs.push({ hip, knee });
+  }
+  const torsoJ = joint(hips, 0, 0.05, 0);
+  const torso = add(torsoJ, new THREE.CapsuleGeometry(0.46, 0.7, 8, 24), top, 0, 0.62, 0);
+  torso.scale.set(1.1, 1, 0.76); torso.rotation.y = Math.PI;
+  add(torsoJ, new THREE.CylinderGeometry(0.15, 0.17, 0.3, 12), skin, 0, 1.44, 0);       // neck
+  for (const s of [1, -1]) {
+    const sh = joint(torsoJ, s * 0.6, 1.2, 0);
+    add(sh, new THREE.SphereGeometry(0.2, 14, 10), sleeve);                              // shoulder
+    add(sh, new THREE.CapsuleGeometry(0.16, 0.4, 6, 12), sleeve, 0, -0.32, 0);
+    const el = joint(sh, 0, -0.66, 0);
+    add(el, new THREE.CapsuleGeometry(0.14, 0.38, 6, 12), o.shortSleeves ? skin : sleeve, 0, -0.3, 0);
+    const hand = joint(el, 0, -0.64, 0);
+    add(hand, new THREE.SphereGeometry(0.15, 12, 8), handMat).scale.set(0.9, 1.15, 0.75);
+    arms.push({ sh, el, hand });
+  }
+  const head = joint(torsoJ, 0, 1.86, 0);
+  const skull = add(head, new THREE.SphereGeometry(0.38, 28, 18), std("#ffffff", { map: faceTexture(o.skin, o.face || {}), roughness: 0.55 }));
+  skull.scale.set(0.95, 1.1, 0.98);
+  for (const s of [1, -1]) add(head, new THREE.SphereGeometry(0.08, 10, 8), skin, s * 0.36, 0, -0.02).scale.set(0.6, 1, 1);   // ears
+  const hairMat = std(o.hair, { roughness: 0.8 });
+  const cap = add(head, new THREE.SphereGeometry(0.405, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.42), hairMat, 0, 0.04, -0.03);
+  cap.scale.set(0.98, 1.12, 1.02); cap.rotation.x = -0.32;
+  add(head, new THREE.SphereGeometry(0.39, 20, 12, 0, Math.PI * 2, Math.PI * 0.35, Math.PI * 0.35), hairMat, 0, 0, -0.06).rotation.x = -0.2;   // back of the head
+  if (o.ponytail) {
+    const pt = joint(head, 0, 0.12, -0.36);
+    add(pt, new THREE.SphereGeometry(0.07, 10, 8), std(o.tie || "#c22e22"));
+    add(pt, new THREE.CapsuleGeometry(0.11, 0.42, 6, 10), hairMat, 0, -0.3, -0.06).rotation.x = 0.35;
+    o._pony = pt;
+  }
+  scene.add(root);
+  return { root, hips, torsoJ, torso, head, legs, arms, ph: Math.random() * 6, o };
+}
+function makeHelmet() {
+  const g = new THREE.Group();
+  const shell = new THREE.Mesh(new THREE.SphereGeometry(0.46, 28, 18), new THREE.MeshStandardMaterial({ color: "#d8342c", roughness: 0.25, metalness: 0.1 }));
+  shell.scale.set(0.95, 1, 1.08);
+  const visor = new THREE.Mesh(new THREE.SphereGeometry(0.47, 24, 12, Math.PI * 0.2, Math.PI * 0.6, Math.PI * 0.32, Math.PI * 0.22),
+    new THREE.MeshStandardMaterial({ color: "#14181e", roughness: 0.1, metalness: 0.6 }));
+  visor.scale.set(0.95, 1, 1.08);
+  const stripe = new THREE.Mesh(new THREE.TorusGeometry(0.44, 0.035, 8, 32, Math.PI), new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.3 }));
+  stripe.rotation.y = Math.PI / 2; stripe.scale.set(1, 1.02, 1.08);
+  for (const m of [shell, visor, stripe]) { m.castShadow = true; g.add(m); }
+  return g;
+}
+const _hv = new THREE.Vector3(), _hq = new THREE.Quaternion(), _hm = new THREE.Matrix4(), _flip = new THREE.Matrix4().makeRotationX(Math.PI);
+function poseHeroes(dt) {
+  const T = titleState, t = T.t;
+  for (const h of T.heroes) {
+    const b = Math.sin(t * 1.8 + h.ph);
+    h.torso.scale.y = 1 + b * 0.012;                                     // breathing
+    h.hips.rotation.z = Math.sin(t * 0.5 + h.ph) * 0.025;                // weight shift
+    h.torsoJ.rotation.z = -h.hips.rotation.z * 1.3;
+    for (const [i, L] of h.legs.entries()) { L.hip.rotation.z = (i ? 1 : -1) * 0.04; L.knee.rotation.x = 0.04 + (i === (Math.sin(t * 0.5 + h.ph) > 0 ? 0 : 1) ? 0.08 : 0); }
+    // look at the camera (heads only turn so far)
+    h.root.getWorldPosition(_hv);
+    let want = Math.atan2(camera.position.x - _hv.x, camera.position.z - _hv.z) - h.root.rotation.y;
+    while (want > Math.PI) want -= 2 * Math.PI;
+    while (want < -Math.PI) want += 2 * Math.PI;
+    want = Math.max(-0.9, Math.min(0.9, want));
+    h.head.rotation.y += (want - h.head.rotation.y) * Math.min(1, dt * 2.5);
+    h.head.rotation.x = Math.sin(t * 0.9 + h.ph) * 0.04 - 0.05;
+    const [left, right] = h.arms;                                         // arms[0] is +x (their left)
+    if (h.role === "driver") {
+      // helmet held at the left hip, the occasional wave with the right hand
+      left.sh.rotation.set(-0.25, 0, 0.18); left.el.rotation.set(-1.25, 0, 0);
+      const wave = Math.max(0, Math.sin(t * 0.55 + 1)) ** 3;
+      right.sh.rotation.set(-0.2 * wave, 0, -0.15 - wave * 2.4); right.el.rotation.set(-0.3 * wave, 0, -wave * 0.4 * (1 + Math.sin(t * 9) * 0.5));
+      h.helmet.position.set(0, -0.2, 0.32);
+    } else if (h.role === "umbrella") {
+      // right hand up holding the grid umbrella, left hand relaxed
+      right.sh.rotation.set(-2.55, 0, 0.12); right.el.rotation.set(-0.35, 0, 0);
+      left.sh.rotation.set(-0.08, 0, 0.12 + Math.sin(t + 1) * 0.02); left.el.rotation.set(-0.2, 0, 0);
+    } else {
+      // waving the team flag
+      const w = Math.sin(t * 4.2);
+      right.sh.rotation.set(-0.3, 0, -2.45 + w * 0.35); right.el.rotation.set(-0.25 - w * 0.15, 0, 0);
+      left.sh.rotation.set(-0.15, 0, 0.35); left.el.rotation.set(-1.0, 0, 0);
+    }
+    if (h.o._pony) h.o._pony.rotation.x = Math.sin(t * 2.2 + h.ph) * 0.08;
+    h.root.updateMatrixWorld(true);
+    if (h.flag) {
+      h.arms[1].hand.matrixWorld.decompose(_hv, _hq, new THREE.Vector3());
+      h.flag.g.matrix.copy(_hm.compose(_hv, _hq, new THREE.Vector3(1, 1, 1)).multiply(_flip));
+      h.flag.g.matrixWorldNeedsUpdate = true;
+      h.flag.flag.amp = 1.2;
+    }
+    if (h.umbrella) {
+      h.arms[1].hand.getWorldPosition(_hv);
+      h.umbrella.position.set(_hv.x, _hv.y - 3.6, _hv.z);
+    }
+  }
+}
+
 function stageTitle() {
   placeRacer(truck, 3, 0);
   const p0 = track.pts[(track.pts.length - 3) % track.pts.length];
@@ -3048,11 +3221,20 @@ function stageTitle() {
   if (!titleState.staged) {
     const R = rng(8);
     const [dx, dy] = at(1.5, 7.5), [ax, ay] = at(-2, -7.5), [fx, fy] = at(7.5, 6.5);
-    // driver in a red race suit and helmet-red cap
-    titleState.people.push(makePerson({ x: dx, y: dy, yaw: face(dx, dy) + 0.6, sit: false, hat: "cap", hatCol: "#c22e22", shirt: "#d8342c", pants: "#d8342c" }, R));
-    // crew: team polo and pants, hair tied back; one holds the grid umbrella, one waves a flag
-    titleState.people.push(makePerson({ x: ax, y: ay, yaw: face(ax, ay) - 0.5, sit: false, hat: "hair", hair: "#5a3a1e", shirt: "#ffffff", pants: "#c22e22" }, R));
-    titleState.people.push(makePerson({ x: fx, y: fy, yaw: face(fx, fy) + 0.9, sit: false, hat: "hair", hair: "#e3c27a", shirt: "#c22e22", pants: "#1c1c1c", flag: "devils" }, R));
+    const put = (h, x, y, yaw, role) => { h.root.position.set(x, 0, y); h.root.rotation.y = yaw; h.role = role; titleState.heroes.push(h); return h; };
+    // driver: red race suit with white side stripes, gloves, boots, helmet in hand
+    const drv = put(makeHero({ skin: "#e8b48f", hair: "#3a2414", pants: "#d8342c", gloves: "#1b1b1b", shoes: "#1b1b1b",
+      shirt: { base: "#d8342c", side: "#ffffff", logo: "#ffffff", belt: "#1b1b1b", patch: "#ffc861" }, face: { eyes: "#3d5a2a" } }),
+      dx, dy, face(dx, dy) + Math.PI + 0.5, "driver");
+    drv.helmet = makeHelmet(); drv.arms[0].hand.add(drv.helmet);
+    // crew: team polos with collar and chest logo, team pants, hair tied back
+    const ca = put(makeHero({ skin: "#c98f6a", hair: "#4a2c16", pants: "#a8261c", shoes: "#f2f2f2", ponytail: true, tie: "#ffffff", shortSleeves: true,
+      shirt: { base: "#ffffff", collar: "#c22e22", logo: "#c22e22" }, face: { shades: true, lips: "#b0503e", brows: "#2c1a0e" } }),
+      ax, ay, face(ax, ay) + Math.PI - 0.4, "umbrella");
+    const cb = put(makeHero({ skin: "#f0c4a2", hair: "#d9b268", pants: "#1c1c1c", shoes: "#1b1b1b", ponytail: true, tie: "#c22e22", shortSleeves: true,
+      shirt: { base: "#c22e22", collar: "#ffffff", logo: "#ffffff" }, face: { eyes: "#3a6aa0", lips: "#b9584a", brows: "#8a6a3a" } }),
+      fx, fy, face(fx, fy) + Math.PI + 0.8, "flag");
+    cb.flag = makeFlag("devils", false);
     // grid umbrella in team red and white
     const um = new THREE.Group();
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 6.4, 6), new THREE.MeshLambertMaterial({ color: "#dddddd" }));
@@ -3062,13 +3244,15 @@ function stageTitle() {
         new THREE.MeshLambertMaterial({ color: k % 2 ? "#ffffff" : "#c22e22", side: THREE.DoubleSide }));
       seg.position.y = 6.6; seg.castShadow = true; um.add(seg);
     }
-    um.position.set(ax + nx * -0.9, 0, ay + ny * -0.9);
+    um.position.set(ax, 0, ay);
     scene.add(um);
+    ca.umbrella = um;
     titleState.props.push(um);
     titleState.staged = true;
   }
   for (const p of titleState.people) p.hidden = false;
   for (const m of titleState.props) m.visible = true;
+  for (const h of titleState.heroes) { h.root.visible = true; if (h.flag) h.flag.g.visible = true; }
 }
 function enterTitle() {
   resetTruck();
@@ -3088,6 +3272,7 @@ function exitTitle(then) {
   if (s) { scene.background = s.bg; scene.fog = s.fog; sun.color.copy(s.sunC); sun.intensity = s.sunI; sun.position.copy(s.sunP); }
   for (const p of titleState.people) p.hidden = true;
   for (const m of titleState.props) m.visible = false;
+  for (const h of titleState.heroes) { h.root.visible = false; if (h.flag) h.flag.g.visible = false; }
   document.getElementById("title").hidden = true;
   fitCamera();
   then();
@@ -3098,6 +3283,7 @@ function titleCamera(dt) {
   camera.fov = 36; camera.aspect = W / H; camera.updateProjectionMatrix();
   camera.position.set(truck.x + Math.cos(a) * r, 12 + Math.sin(titleState.t * 0.21) * 2, truck.y + Math.sin(a) * r);
   camera.lookAt(truck.x, 3.4, truck.y);
+  poseHeroes(dt);
 }
 function drawTitleMap() {
   const cv = document.getElementById("tMap"), c = cv.getContext("2d");
