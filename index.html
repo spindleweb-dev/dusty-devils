@@ -404,18 +404,26 @@ function box(w, h, d, color, x, y, z, parent = scenery) {
   // advertising boards along the front of the stand
   for (let x = x0; x < x1; x += 20) box(19, 2.4, 0.5, ["#f2c230", "#ffffff", "#d8342c"][(x / 20) % 3 | 0], x + 10, 1.2, front + 2);
 }
-// ---------- Safety fence behind the tyres, with sponsor banners ----------
-// A chain-link fence on steel posts runs along both sides of the track,
-// just outside the tyre walls, wherever it doesn't cut into another part of
-// the track. Banners for made-up sponsors hang on some of the spans.
-const FENCE_OFF = HW + 5.8, FENCE_H = 4.2, POST_EVERY = 4;   // posts every 4 track samples (6 units)
+// ---------- Catch fence behind the tyres, with sponsor banners ----------
+// A tall street-circuit style catch fence: straight up for FENCE_H, then the
+// top section angles in over the track by FENCE_LEAN. It runs along both
+// sides wherever it doesn't cut into another part of the track. Banners for
+// made-up sponsors stand along the bottom of it.
+const FENCE_OFF = HW + 5.8;      // distance from the centreline (just behind the tyres)
+const FENCE_H = 10;              // vertical part (~1.5× truck height)
+const FENCE_TOP = 14.5;          // total height (~2× truck height)
+const FENCE_LEAN = 3.8;          // how far the top leans in towards the track
+const POST_EVERY = 4;            // posts every 4 track samples (6 units)
 const fence = { runs: [] };
 function chainLinkTexture() {
   const c = document.createElement("canvas"); c.width = c.height = 64;
   const x = c.getContext("2d");
-  x.strokeStyle = "rgba(205,210,215,0.95)"; x.lineWidth = 3;
-  x.beginPath(); x.moveTo(0, 0); x.lineTo(64, 64); x.moveTo(64, 0); x.lineTo(0, 64); x.stroke();
-  x.beginPath(); x.moveTo(-32, 32); x.lineTo(32, -32); x.moveTo(32, 96); x.lineTo(96, 32); x.moveTo(-32, 32); x.lineTo(32, 96); x.moveTo(32, -32); x.lineTo(96, 32); x.stroke();
+  x.strokeStyle = "rgba(210,215,220,0.85)"; x.lineWidth = 2;
+  x.beginPath();
+  x.moveTo(0, 0); x.lineTo(64, 64); x.moveTo(64, 0); x.lineTo(0, 64);
+  x.moveTo(-32, 32); x.lineTo(32, -32); x.moveTo(32, 96); x.lineTo(96, 32);
+  x.moveTo(-32, 32); x.lineTo(32, 96); x.moveTo(32, -32); x.lineTo(96, 32);
+  x.stroke();
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -444,35 +452,42 @@ const SPONSORS = [
 ];
 function buildFence() {
   const p = track.pts, n = p.length;
-  const meshTex = chainLinkTexture();
-  const meshMat = new THREE.MeshLambertMaterial({ map: meshTex, alphaTest: 0.35, side: THREE.DoubleSide, color: "#c8ccd0" });
-  const steel = "#8c9196";
-  const posts = [], rails = [];
+  const meshMat = new THREE.MeshLambertMaterial({ map: chainLinkTexture(), alphaTest: 0.3, side: THREE.DoubleSide, color: "#c8ccd0" });
+  const steel = new THREE.MeshLambertMaterial({ color: "#6f757b" });
   for (const side of [-1, 1]) {
-    // fence line points (one per post), split into runs where the fence fits
     let run = [];
     const flush = () => { if (run.length > 1) fence.runs.push({ side, pts: run }); run = []; };
     for (let k = 0; k <= n; k += POST_EVERY) {
       const q = p[k % n];
-      const x = q.x - q.ty * side * FENCE_OFF, y = q.y + q.tx * side * FENCE_OFF;
+      const ox = -q.ty * side, oy = q.tx * side;                 // outwards, away from the track
+      const x = q.x + ox * FENCE_OFF, y = q.y + oy * FENCE_OFF;
       const ok = nearest(x, y).d > HW + 3.5 && x > GX0 + 2 && x < GX0 + GW - 2 && y > GY0 + 2;
-      if (ok) run.push({ x, y, tx: q.tx, ty: q.ty, k: k % n });
+      // where the leaning top would hang over another bit of track, stand it up straight
+      const lean = nearest(x - ox * FENCE_LEAN, y - oy * FENCE_LEAN).d > HW + 1 ? FENCE_LEAN : 0;
+      if (ok) run.push({ x, y, ix: -ox, iy: -oy, tx: q.tx, ty: q.ty, lean });
       else flush();
     }
     flush();
   }
-  // a run that ends where the next one starts (the loop's seam) is joined up
-  const bannerSpots = [];
+  const posts = [], arms = [], rails = [], bannerSpots = [];
+  // rail lines: [height, how far along the lean (0 = vertical part, 1 = top)]
+  const RAILS = [[0.4, 0], [FENCE_H * 0.5, 0], [FENCE_H, 0], [FENCE_TOP, 1]];
+  const at = (q, h, f) => ({ x: q.x + q.ix * q.lean * f, y: h, z: q.y + q.iy * q.lean * f });
   for (const r of fence.runs) {
     const pts = r.pts;
-    // chain-link panel as one ribbon per run
+    // chain-link: one ribbon per run with three rows (bottom, knee, angled top)
     const pos = [], uv = [], idx = [];
     let u = 0;
     pts.forEach((q, i) => {
       if (i) u += Math.hypot(q.x - pts[i - 1].x, q.y - pts[i - 1].y);
-      pos.push(q.x, 0.15, q.y, q.x, FENCE_H, q.y);
-      uv.push(u / 1.6, 0, u / 1.6, FENCE_H / 1.6);
-      if (i) { const a = (i - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+      const a = at(q, 0.15, 0), b = at(q, FENCE_H, 0), c = at(q, FENCE_TOP, 1);
+      pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+      const vTop = (FENCE_H + Math.hypot(FENCE_TOP - FENCE_H, q.lean)) / 1.6;
+      uv.push(u / 1.6, 0, u / 1.6, FENCE_H / 1.6, u / 1.6, vTop);
+      if (i) {
+        const o = (i - 1) * 3, m = i * 3;
+        idx.push(o, o + 1, m, o + 1, m + 1, m, o + 1, o + 2, m + 1, o + 2, m + 2, m + 1);
+      }
     });
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
@@ -482,34 +497,37 @@ function buildFence() {
     scenery.add(m);
     pts.forEach((q, i) => {
       posts.push(q);
-      if (i) rails.push([pts[i - 1], q]);
+      arms.push(q);
+      if (i) for (const [h, f] of RAILS) rails.push([at(pts[i - 1], h, f), at(q, h, f)]);
       // banners need a straight stretch of three spans (~18 units)
-      if (i >= 3 && i % 2 === 0) { const a = pts[i - 3]; if (Math.abs(Math.atan2(a.tx * q.ty - a.ty * q.tx, a.tx * q.tx + a.ty * q.ty)) < 0.12) bannerSpots.push([a, q, r.side]); }
+      if (i >= 3 && i % 2 === 0) { const a = pts[i - 3]; if (Math.abs(Math.atan2(a.tx * q.ty - a.ty * q.tx, a.tx * q.tx + a.ty * q.ty)) < 0.12) bannerSpots.push([a, q]); }
     });
   }
-  // posts and rails (instanced)
-  const postMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.22, FENCE_H + 0.3, 6), new THREE.MeshLambertMaterial({ color: "#6f757b" }), posts.length);
-  posts.forEach((q, i) => postMesh.setMatrixAt(i, new THREE.Matrix4().makeTranslation(q.x, (FENCE_H + 0.3) / 2, q.y)));
+  const mm = new THREE.Matrix4(), qq = new THREE.Quaternion(), sc = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), dir = new THREE.Vector3();
+  // a thin cylinder from point A to point B
+  const beam = (mesh, i, A, B, thick) => {
+    dir.set(B.x - A.x, B.y - A.y, B.z - A.z);
+    const len = dir.length();
+    qq.setFromUnitVectors(up, dir.normalize());
+    sc.set(thick, len, thick);
+    mm.compose(new THREE.Vector3((A.x + B.x) / 2, (A.y + B.y) / 2, (A.z + B.z) / 2), qq, sc);
+    mesh.setMatrixAt(i, mm);
+  };
+  const cyl = new THREE.CylinderGeometry(1, 1, 1, 6);
+  const postMesh = new THREE.InstancedMesh(cyl, steel, posts.length + arms.length);
+  posts.forEach((q, i) => beam(postMesh, i, at(q, 0, 0), at(q, FENCE_H + 0.1, 0), 0.24));
+  arms.forEach((q, i) => beam(postMesh, posts.length + i, at(q, FENCE_H, 0), at(q, FENCE_TOP + 0.1, 1), 0.2));
   postMesh.castShadow = true; scenery.add(postMesh);
-  const railMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.16, 0.16), new THREE.MeshLambertMaterial({ color: steel }), rails.length * 2);
-  const mm = new THREE.Matrix4(), qq = new THREE.Quaternion(), sc = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
-  rails.forEach(([a, b], i) => {
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    qq.setFromAxisAngle(up, -Math.atan2(b.y - a.y, b.x - a.x));
-    sc.set(len, 1, 1);
-    for (const [j, h] of [[0, FENCE_H], [1, FENCE_H * 0.5]]) {
-      mm.compose(new THREE.Vector3((a.x + b.x) / 2, h, (a.y + b.y) / 2), qq, sc);
-      railMesh.setMatrixAt(i * 2 + j, mm);
-    }
-  });
+  const railMesh = new THREE.InstancedMesh(cyl, steel, rails.length);
+  rails.forEach(([A, B], i) => beam(railMesh, i, A, B, 0.11));
   railMesh.castShadow = true; scenery.add(railMesh);
-  // sponsor banners on about a third of the spots, spread around the track
+  // sponsor banners standing along the bottom of the fence
   const R = rng(5);
   const used = [];
   let si = 0;
   const bannerMats = SPONSORS.map(b => new THREE.MeshLambertMaterial({ map: bannerTexture(b) }));
   const edge = new THREE.MeshLambertMaterial({ color: "#dddddd" });
-  for (const [a, b, side] of bannerSpots) {
+  for (const [a, b] of bannerSpots) {
     const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
     if (used.some(([ux, uy]) => Math.hypot(ux - mx, uy - my) < 40)) continue;
     if (R() < 0.3) continue;
@@ -517,13 +535,11 @@ function buildFence() {
     const len = Math.hypot(b.x - a.x, b.y - a.y) - 0.4;
     const mat = bannerMats[si++ % bannerMats.length];
     const ban = new THREE.Mesh(new THREE.BoxGeometry(len, 3.0, 0.1), [edge, edge, edge, edge, mat, mat]);
-    // hang it on the track side of the fence
-    const nx = a.ty * side, ny = -a.tx * side;            // points from the fence back towards the track
-    ban.position.set(mx + nx * 0.2, 2.35, my + ny * 0.2);
-    // lean the board back (like trackside A-frame boards) so its face tilts up towards the camera,
-    // which sits to the south (+z) looking down: the top always leans north.
+    ban.position.set(mx + a.ix * 1.3, 2.2, my + a.iy * 1.3);
+    // lean the board back (like trackside A-frame boards) so its face tilts up towards
+    // the camera, which sits to the south (+z) looking down: the top always leans north.
     const yaw = -Math.atan2(b.y - a.y, b.x - a.x);
-    const nz = Math.cos(yaw);                                 // z part of the board's +z face normal
+    const nz = Math.cos(yaw);
     ban.rotation.set(-0.62 * Math.sign(nz || 1) * Math.min(1, Math.abs(nz) * 1.5), yaw, 0, "YXZ");
     ban.castShadow = true;
     scenery.add(ban);
