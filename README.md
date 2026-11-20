@@ -11,6 +11,8 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
 | ↓ / S | Brake / reverse |
 | ← → / A D | Steer |
 | Space | Nitro burst |
+| Enter | Start a race against the rival teams |
+| P | Back to practice |
 | R | Reset truck |
 | G | Classic (1×, 16-direction sprites) / Enhanced (4×) graphics |
 | T | Handling tuning panel |
@@ -25,8 +27,8 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
    - ✅ Team pit areas beside the grandstand (invented teams Voltroo Racing and Irongum Racing): motorhomes with awnings, gazebos, spare tyres, tool chests, fuel drums, parked team trucks and mechanics
    - ✅ Modern dashboard HUD in Enhanced mode (lap, lap timer with last/best/delta, speedo, rev bar, shift light, gear, cash, nitro cells); Classic mode keeps the retro HUD
    - ✅ Crowds: campers in chairs with hats, beers, eskies and umbrellas; flag-waving fans; corner marshals with yellow flags. They watch and cheer the truck.
-2. Laps, checkpoints, finish order
-3. Computer drivers
+2. ✅ Races: 4 laps, start lights, positions, leaderboard, results and prize money
+3. ✅ Computer drivers: the Voltroo and Irongum pit teams race you
 4. Hills, jumps, mud and water
 5. Nitro and pickups
 6. Shop and upgrades, more tracks, reverse tracks
