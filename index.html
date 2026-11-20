@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dusty Devils</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
 <style>
   html, body { margin: 0; height: 100%; background: #14110d; color: #e8dcc6;
     font-family: "Trebuchet MS", system-ui, sans-serif; overflow: hidden; }
@@ -692,9 +695,9 @@ function makeFlag(design, small) {
 function makePerson(o, R) {
   const p = Object.assign({ phase: R() * 10, headYaw: 0, excite: 0, drinkPose: 0, drinking: 0, nextDrink: 2 + R() * 12 }, o);
   const skin = pick(R, SKIN);
-  const shirt = o.marshal ? "#ff7a12" : pick(R, SHIRTS);
-  const pants = o.marshal ? "#1f2a44" : pick(R, PANTS);
-  const armCol = o.marshal ? shirt : R() < 0.6 ? skin : shirt;
+  const shirt = o.shirt || (o.marshal ? "#ff7a12" : pick(R, SHIRTS));
+  const pants = o.pants || (o.marshal ? "#1f2a44" : pick(R, PANTS));
+  const armCol = o.marshal || o.shirt ? shirt : R() < 0.6 ? skin : shirt;
   const P = p.parts = {
     torso: I.torso.add(_id, shirt), head: I.head.add(_id, skin),
     thighL: I.thigh.add(_id, pants), thighR: I.thigh.add(_id, pants),
@@ -703,7 +706,7 @@ function makePerson(o, R) {
   };
   if (o.marshal) P.stripe = I.stripe.add(_id, "#e8e8e8");
   if (o.can) P.can = I.can.add(_id, pick(R, CANS));
-  const hc = o.marshal ? "#ffffff" : pick(R, HATCOL);
+  const hc = o.hatCol || (o.marshal ? "#ffffff" : pick(R, HATCOL));
   if (o.hat === "cap") { P.hatA = ["capCrown", I.capCrown.add(_id, hc)]; P.hatB = ["capBrim", I.capBrim.add(_id, hc)]; }
   else if (o.hat === "wide") { P.hatA = ["hatCrown", I.hatCrown.add(_id, hc)]; P.hatB = ["hatBrim", I.hatBrim.add(_id, hc)]; }
   if (o.flag) p.flagObj = makeFlag(o.flag, o.marshal);
@@ -834,6 +837,126 @@ function buildCrowd() {
   }
   for (const k in I) I[k].dirty();
 }
+// ---------- Team pit areas beside the grandstand ----------
+// Two invented race teams, each with a concrete pad, a big motorhome with a
+// pull-out awning, a pop-up gazebo, spare race tyres on rims, tool chests,
+// fuel drums, their own parked truck and a few mechanics in team colours.
+const TEAMS = [
+  { name: "VOLTROO RACING", base: "#3b1d6e", accent: "#c6ff3a", truck: { color: "#5a2fa0", dark: "#2a1450", light: "#7a52c4" } },
+  { name: "IRONGUM RACING", base: "#1f6a3a", accent: "#f2c230", truck: { color: "#22803f", dark: "#0f4a22", light: "#3fa45c" } }
+];
+function teamTexture(team) {
+  const c = document.createElement("canvas"); c.width = 1024; c.height = 170;
+  const x = c.getContext("2d");
+  x.fillStyle = team.base; x.fillRect(0, 0, 1024, 170);
+  x.fillStyle = team.accent;
+  x.beginPath(); x.moveTo(0, 128); x.bezierCurveTo(320, 70, 620, 170, 1024, 80); x.lineTo(1024, 108); x.bezierCurveTo(620, 200, 320, 100, 0, 158); x.closePath(); x.fill();
+  x.font = "900 80px 'Arial Black', sans-serif"; x.textAlign = "center"; x.textBaseline = "middle";
+  x.fillStyle = "rgba(0,0,0,.35)"; x.fillText(team.name, 516, 64);
+  x.fillStyle = "#ffffff"; x.fillText(team.name, 512, 60);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+}
+const pitTyres = new THREE.InstancedMesh(tyreGeo, new THREE.MeshLambertMaterial({ color: "#1b1b1b" }), 160);
+const pitRims = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.85, 0.85, 1.12, 10), new THREE.MeshLambertMaterial({ color: "#cfcfcf" }), 160);
+pitTyres.count = pitRims.count = 0;
+pitTyres.castShadow = pitRims.castShadow = pitTyres.receiveShadow = true;
+scenery.add(pitTyres, pitRims);
+const pitMatCache = {};
+const pitMat = col => pitMatCache[col] || (pitMatCache[col] = new THREE.MeshLambertMaterial({ color: col }));
+function pitBox(parent, w, h, d, color, x, y, z, ry = 0) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), typeof color === "string" ? pitMat(color) : color);
+  m.position.set(x, y, z); m.rotation.y = ry;
+  m.castShadow = m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+function pitCyl(parent, r, h, color, x, y, z) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 10), pitMat(color));
+  m.position.set(x, y, z); m.castShadow = m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+function buildPit(cx, cz, team, f, R) {
+  // f = +1 or -1 mirrors the layout so the motorhome cab points at the grandstand
+  const g = new THREE.Group(); g.position.set(cx, 0, cz); scenery.add(g);
+  const pad = pitBox(g, 54, 0.12, 30, "#8f8d88", 0, 0.06, 0); pad.castShadow = false;
+  for (const lx of [-1, 13]) pitBox(g, 0.4, 0.13, 11, "#f2f2f2", lx * f, 0.07, 8.5).castShadow = false;   // parking bay lines
+  // motorhome
+  const mh = new THREE.Group(); mh.position.set(-4 * f, 0, -8); g.add(mh);
+  pitBox(mh, 26, 7, 6.5, team.base, 0, 4.4, 0);
+  pitBox(mh, 26.1, 1.1, 6.6, team.accent, 0, 1.9, 0);
+  pitBox(mh, 21, 1.3, 6.56, "#1d2630", -1.5 * f, 6.5, 0);            // window band
+  pitBox(mh, 5, 5.6, 6.3, team.base, 15.5 * f, 3.7, 0);              // cab
+  pitBox(mh, 0.25, 2.2, 5.6, "#22303c", 18.05 * f, 5.0, 0);          // windscreen
+  pitBox(mh, 0.5, 1.0, 6.5, "#222222", 18.1 * f, 1.6, 0);            // bumper
+  for (const ax of [-5, 3]) pitBox(mh, 2.8, 0.9, 2.4, "#dcdcdc", ax, 8.35, -0.6);   // roof air-con units
+  const wheelGeo = new THREE.CylinderGeometry(1.15, 1.15, 0.9, 12); wheelGeo.rotateX(Math.PI / 2);
+  for (const wx of [-9.5, -7, 6.5, 15.5 * f]) for (const wz of [-3.3, 3.3]) {
+    const w = new THREE.Mesh(wheelGeo, pitMat("#151515")); w.position.set(wx, 1.15, wz); w.castShadow = true; mh.add(w);
+  }
+  const decal = new THREE.Mesh(new THREE.PlaneGeometry(20, 3.3), new THREE.MeshLambertMaterial({ map: teamTexture(team) }));
+  decal.position.set(-1.5 * f, 4.2, 3.27); mh.add(decal);
+  // pull-out awning over a rubber mat with tool chests
+  const awn = new THREE.Group(); awn.position.set(-1.5 * f, 7.4, 3.25); awn.rotation.x = 0.16; mh.add(awn);
+  // team name printed on top of the awning, where the camera can see it
+  const awTop = new THREE.Mesh(new THREE.BoxGeometry(18, 0.14, 6.6), [pitMat(team.accent), pitMat(team.accent),
+    new THREE.MeshLambertMaterial({ map: teamTexture(team) }), pitMat(team.accent), pitMat(team.accent), pitMat(team.accent)]);
+  awTop.position.set(0, 0, 3.3); awTop.castShadow = true; awn.add(awTop);
+  pitBox(awn, 18, 0.8, 0.12, team.base, 0, -0.4, 6.6);              // valance
+  const poleH = 7.4 - 6.6 * Math.sin(0.16);
+  for (const px of [-8.6, 8.6]) pitCyl(mh, 0.1, poleH, "#cccccc", -1.5 * f + px, poleH / 2, 3.25 + 6.5);
+  pitBox(mh, 18, 0.05, 6, "#2e2e2e", -1.5 * f, 0.15, 6.4).castShadow = false;
+  for (const tx of [-5, -2, 4]) {
+    const chest = pitBox(mh, 2.6, 2.8, 1.3, "#c4241c", -1.5 * f + tx, 1.55, 4.3);
+    for (let d = 0; d < 4; d++) pitBox(mh, 2.3, 0.08, 0.04, "#2a2a2a", -1.5 * f + tx, 0.75 + d * 0.6, 4.97).castShadow = false;
+    chest.castShadow = true;
+  }
+  // pop-up gazebo with spare tyres stacked in front of it
+  const gz = new THREE.Group(); gz.position.set(-18 * f, 0, 5); g.add(gz);
+  for (const lx of [-3.8, 3.8]) for (const lz of [-3.8, 3.8]) pitCyl(gz, 0.12, 4.6, "#d8d8d8", lx, 2.3, lz);
+  pitBox(gz, 7.9, 0.7, 7.9, team.accent, 0, 4.4, 0);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(5.7, 1.9, 4), pitMat(team.base));
+  roof.rotation.y = Math.PI / 4; roof.position.y = 5.7; roof.castShadow = true; gz.add(roof);
+  pitBox(gz, 4, 1.4, 1.6, "#e8e8e8", 0, 0.8, -1.8);                  // workbench
+  const m4 = new THREE.Matrix4();
+  for (let s = 0; s < 6; s++) {
+    const sx = cx + (-25 + s * 2.9) * f, sz = cz + 12;
+    const levels = 3 + ((R() * 3) | 0);
+    for (let l = 0; l < levels; l++) {
+      m4.makeScale(0.85, 0.85, 0.85).setPosition(sx, 0.6 + l * 1.15, sz);
+      pitTyres.setMatrixAt(pitTyres.count++, m4);
+      m4.makeScale(1, 1, 1).setPosition(sx, 0.6 + l * 1.15, sz);
+      pitRims.setMatrixAt(pitRims.count++, m4);
+    }
+  }
+  // fuel drums by the cab
+  [["#2a62c9", 0, 0], ["#c4241c", 2.1, 0.6], ["#2a62c9", 1.0, 2.0]].forEach(([col, dx, dz]) => {
+    pitCyl(g, 0.9, 2.3, col, (23.5 + dx) * f, 1.15, -6 + dz);
+    pitCyl(g, 0.92, 0.12, "#333333", (23.5 + dx) * f, 1.6, -6 + dz);
+  });
+  // the team's own truck, parked in its bay
+  const tm = makeTruckModel(team.truck);
+  tm.root.position.set(cx + 6 * f, 0, cz + 8.5);
+  tm.root.rotation.y = f > 0 ? Math.PI * 0.5 + 0.35 : Math.PI * 0.5 - 0.35;
+  tm.root.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  scenery.add(tm.root);
+  // mechanics in team shirts, standing around the truck
+  for (const [mx, mz] of [[-2, 5], [13, 9], [5, 14]]) {
+    const px = cx + mx * f, pz = cz + mz;
+    makePerson({ x: px, y: pz, yaw: Math.atan2(cx + 6 * f - px, cz + 8.5 - pz), sit: false, hat: "cap", shirt: team.base, pants: "#1c1c1c", hatCol: team.accent }, R);
+  }
+  // keep crowds and bushes off the pad
+  for (let ax = -27; ax <= 27; ax += 6) for (let az = -15; az <= 15; az += 6) crowd.avoid.push([cx + ax, cz + az]);
+}
+function buildPits() {
+  const R = rng(33);
+  buildPit(33, -10, TEAMS[0], 1, R);      // left of the grandstand, cab towards it
+  buildPit(287, -10, TEAMS[1], -1, R);    // right of the grandstand
+  pitTyres.instanceMatrix.needsUpdate = pitRims.instanceMatrix.needsUpdate = true;
+}
+buildPits();
+
 buildCrowd();
 
 function updateCrowd(dt) {
@@ -1139,7 +1262,7 @@ function fitCamera() {
     camera.lookAt(target);
     camera.updateMatrixWorld();
   };
-  const topLimit = 0.72;     // leave room for the HUD strip and the grandstand
+  const topLimit = 0.6;      // leave room for the HUD panels, grandstand and team pits
   for (let iter = 0; iter < 8; iter++) {
     let lo = 20, hi = 5000;
     for (let k = 0; k < 40; k++) {
@@ -1382,7 +1505,11 @@ function updateParticles(dt) {
 }
 
 // ---------- Sync 3D objects with the simulation ----------
+let gearbox = null, gearState = { rpm: 450, load: 0, gear: 1, shifted: 0 };
 function syncScene(dt) {
+  // pretend gearbox: drives the engine sound and the dashboard rev bar / gear
+  if (!gearbox) gearbox = makeGearbox();
+  gearState = gearboxStep(gearbox, Math.min(1.2, Math.abs(truck.vf || 0) / Math.max(1, P.maxSpeed)), !!truck.thr, truck.boost > 0, Math.max(0.001, dt));
   const t = truck;
   let a = t.a;
   if (classic) a = Math.round(a / (Math.PI / 8)) * (Math.PI / 8);   // 16 directions, like old sprite sets
@@ -1454,7 +1581,7 @@ function fmt(t) {
   const m = Math.floor(t / 60), s = t - m * 60;
   return m + ":" + (s < 10 ? "0" : "") + s.toFixed(2);
 }
-function drawHUD() {
+function drawHUDRetro() {
   const c = hctx, t = truck;
   c.clearRect(0, 0, W, H);
   c.fillStyle = "rgba(10,8,6,.62)";
@@ -1484,7 +1611,7 @@ function drawHUD() {
     c.fillStyle = "#c8c8c8"; c.fillRect(bx + 1.2, by, 1.6, 2);
   }
   if (t.boost > 0) { c.fillStyle = "#7cc0ff"; c.fillText("NITRO!", W - 50, H - 14); }
-  if (A.gear) { c.fillStyle = "#f2e6d0"; c.textAlign = "right"; c.fillText("GEAR " + A.gear, W - 4, H - 14); c.textAlign = "left"; }
+  if (gearState.gear) { c.fillStyle = "#f2e6d0"; c.textAlign = "right"; c.fillText("GEAR " + gearState.gear, W - 4, H - 14); c.textAlign = "left"; }
   // floating "+$100" pop-ups above where things were picked up
   c.textAlign = "center";
   for (const q of popups) {
@@ -1507,6 +1634,126 @@ function drawHUD() {
     c.fillText(`spd ${Math.hypot(t.vx, t.vy).toFixed(0)} slide ${t.slide.toFixed(0)} s ${n.s.toFixed(0)}/${track.len.toFixed(0)}`, 4, H - 5);
   }
 }
+
+// ---------- Modern dashboard HUD (Enhanced mode) ----------
+const HUD_CYAN = "#5fe1ff";
+const F_NUM = "'Orbitron', 'Rajdhani', 'Segoe UI', system-ui, sans-serif";
+const F_LBL = "'Rajdhani', 'Segoe UI', 'Trebuchet MS', system-ui, sans-serif";
+try { document.fonts.load("800 20px Orbitron"); document.fonts.load("700 20px Rajdhani"); } catch (e) {}
+function hudRound(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y); c.lineTo(x + w - r, y); c.quadraticCurveTo(x + w, y, x + w, y + r);
+  c.lineTo(x + w, y + h - r); c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  c.lineTo(x + r, y + h); c.quadraticCurveTo(x, y + h, x, y + h - r);
+  c.lineTo(x, y + r); c.quadraticCurveTo(x, y, x + r, y); c.closePath();
+}
+function hudPanel(c, x, y, w, h, edge = "rgba(95,225,255,0.38)", accent = HUD_CYAN) {
+  hudRound(c, x, y, w, h, 2.2);
+  const g = c.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, "rgba(24,36,52,0.80)"); g.addColorStop(1, "rgba(6,10,18,0.74)");
+  c.fillStyle = g; c.fill();
+  c.lineWidth = 0.35; c.strokeStyle = edge; c.stroke();
+  c.fillStyle = "rgba(255,255,255,0.06)"; c.fillRect(x + 2, y + 0.6, w - 4, 0.5);     // glass highlight
+  c.strokeStyle = accent; c.lineWidth = 0.7;
+  c.beginPath();
+  c.moveTo(x + 0.35, y + 4.5); c.lineTo(x + 0.35, y + 0.35); c.lineTo(x + 7, y + 0.35);
+  c.moveTo(x + w - 7, y + h - 0.35); c.lineTo(x + w - 0.35, y + h - 0.35); c.lineTo(x + w - 0.35, y + h - 4.5);
+  c.stroke();
+}
+function hudText(c, txt, x, y, size, weight, family, color, align = "left") {
+  c.font = `${weight} ${size}px ${family}`; c.fillStyle = color; c.textAlign = align; c.textBaseline = "middle";
+  c.fillText(txt, x, y);
+}
+const hudLabel = (c, txt, x, y, align = "left", col = "rgba(150,220,240,0.78)") => hudText(c, txt, x, y, 3.5, 600, F_LBL, col, align);
+function drawHUDModern() {
+  const c = hctx, t = truck;
+  c.clearRect(0, 0, W, H);
+  c.save();
+  const lap = t.laps + (t.timing ? 1 : 0);
+  // left: lap + session
+  hudPanel(c, 4, 3, 58, 23);
+  hudLabel(c, "LAP", 8.5, 8.2);
+  hudText(c, String(lap).padStart(2, "0"), 8, 18.5, 11, 800, F_NUM, "#ffffff");
+  hudRound(c, 33, 6.3, 25, 5.2, 1.4); c.strokeStyle = "rgba(255,200,97,0.8)"; c.lineWidth = 0.4; c.stroke();
+  hudText(c, "PRACTICE", 45.5, 9, 3.4, 700, F_LBL, "#ffc861", "center");
+  hudLabel(c, "SESSION", 33.5, 16.5);
+  hudText(c, "OPEN", 33.5, 21.5, 4.2, 700, F_NUM, "#d8f6ff");
+  // centre: lap time, last, best, delta
+  const flash = t.newBest && Math.floor(raceTime * 6) % 2;
+  hudPanel(c, 108, 3, 104, 23, flash ? "rgba(255,210,90,0.9)" : undefined, flash ? "#ffd25a" : HUD_CYAN);
+  hudLabel(c, t.newBest ? "NEW BEST LAP" : "LAP TIME", 160, 7.6, "center", t.newBest ? "#ffd25a" : undefined);
+  const cur = t.timing ? raceTime - t.lapStart : null;
+  hudText(c, cur == null ? "-:--.--" : fmt(cur), 160, 15.2, 9.5, 800, F_NUM, cur == null ? "rgba(255,255,255,0.4)" : "#ffffff", "center");
+  c.fillStyle = "rgba(95,225,255,0.18)"; c.fillRect(112, 19.6, 96, 0.3);
+  hudLabel(c, "LAST", 112.5, 22.8);
+  hudText(c, fmt(t.lastLap), 123, 22.8, 3.8, 700, F_NUM, "#d8f6ff");
+  hudLabel(c, "BEST", 207.5, 22.8, "right");
+  hudText(c, fmt(t.best), 196, 22.8, 3.8, 700, F_NUM, "#ffd25a", "right");
+  if (t.lastLap != null && t.best != null) {
+    const d = t.lastLap - t.best;
+    const col = d <= 0.0001 ? "#3ff0a0" : "#ff6b6b";
+    hudText(c, (d <= 0.0001 ? "−" : "+") + Math.abs(d).toFixed(2), 160, 22.8, 3.8, 700, F_NUM, col, "center");
+  }
+  // right: rev bar, speed, gear
+  const rpmF = Math.max(0, Math.min(1, (gearState.rpm - 450) / (5400 - 450)));
+  const shift = gearState.rpm > 4800 && Math.floor(raceTime * 10) % 2;
+  hudPanel(c, 252, 3, 64, 23, shift ? "rgba(255,90,90,0.9)" : undefined, shift ? "#ff5a5a" : HUD_CYAN);
+  const SEG = 14, lit = Math.round(rpmF * SEG);
+  for (let k = 0; k < SEG; k++) {
+    const col = k < 9 ? "#3ff0a0" : k < 12 ? "#ffc04a" : "#ff4d4d";
+    c.fillStyle = k < lit ? col : "rgba(255,255,255,0.10)";
+    hudRound(c, 256 + k * 2.85, 6, 2.3, 2.4, 0.4); c.fill();
+  }
+  const kmh = Math.round(Math.hypot(t.vx, t.vy) * 1.35);
+  hudText(c, String(kmh), 295, 16.2, 11, 800, F_NUM, t.boost > 0 ? "#7cc0ff" : "#ffffff", "right");
+  hudLabel(c, "KM/H", 295, 22.8, "right");
+  hudRound(c, 299, 6, 14, 13.5, 1.6); c.fillStyle = "rgba(95,225,255,0.10)"; c.fill();
+  c.strokeStyle = "rgba(95,225,255,0.6)"; c.lineWidth = 0.4; c.stroke();
+  hudText(c, String(gearState.gear || 1), 306, 13.2, 9, 800, F_NUM, "#ffffff", "center");
+  hudLabel(c, "GEAR", 306, 22.8, "center");
+  // bottom left: cash + nitro cells (+ boost bar)
+  hudPanel(c, 4, H - 19, 98, 16);
+  hudLabel(c, "CASH", 8.5, H - 14.5);
+  hudText(c, "$" + t.cash.toLocaleString("en-AU"), 8, H - 8.2, 6.4, 800, F_NUM, "#ffd25a");
+  hudLabel(c, "NITRO", 47, H - 14.5);
+  for (let k = 0; k < 9; k++) {
+    const x = 47 + k * 5.5, y = H - 11.8;
+    hudRound(c, x, y, 4.3, 5.6, 0.8);
+    if (k < t.nitros) {
+      c.fillStyle = "rgba(74,168,255,0.35)"; c.fill();
+      hudRound(c, x + 0.6, y + 0.6, 3.1, 4.4, 0.5); c.fillStyle = "#4aa8ff"; c.fill();
+    } else { c.strokeStyle = "rgba(255,255,255,0.18)"; c.lineWidth = 0.3; c.stroke(); }
+  }
+  if (t.boost > 0) {
+    c.fillStyle = "rgba(124,192,255,0.25)"; c.fillRect(47, H - 5.2, 49, 1.2);
+    c.fillStyle = "#7cc0ff"; c.fillRect(47, H - 5.2, 49 * t.boost / P.nitroTime, 1.2);
+    hudText(c, "BOOST", 96, H - 14.5, 3.5, 700, F_LBL, "#7cc0ff", "right");
+  }
+  // start prompt
+  if (!t.timing) {
+    const pulse = 0.45 + 0.35 * Math.sin(raceTime * 4);
+    hudRound(c, W / 2 - 52, H / 2 - 7, 104, 14, 3);
+    c.fillStyle = "rgba(6,10,18,0.72)"; c.fill();
+    c.strokeStyle = `rgba(95,225,255,${pulse})`; c.lineWidth = 0.5; c.stroke();
+    hudText(c, "CROSS THE LINE TO START", W / 2, H / 2 + 0.3, 5.2, 700, F_LBL, "#d8f6ff", "center");
+  }
+  // floating "+$100" pop-ups above where things were picked up
+  for (const q of popups) {
+    const v = new THREE.Vector3(q.x, 8 + q.t * 10, q.y).project(camera);
+    const sx = (v.x + 1) / 2 * W, sy = (1 - v.y) / 2 * H;
+    c.globalAlpha = Math.min(1, 2.4 - q.t * 2);
+    hudText(c, q.text, sx + 0.5, sy + 0.5, 5.5, 800, F_NUM, "rgba(0,0,0,0.6)", "center");
+    hudText(c, q.text, sx, sy, 5.5, 800, F_NUM, q.color, "center");
+  }
+  c.globalAlpha = 1;
+  if (debug) {
+    const n = nearest(t.x, t.y);
+    hudText(c, `spd ${Math.hypot(t.vx, t.vy).toFixed(0)} slide ${t.slide.toFixed(0)} s ${n.s.toFixed(0)}/${track.len.toFixed(0)}`, 108, H - 5, 4, 400, "monospace", "#ffffff");
+  }
+  c.restore();
+  c.textAlign = "left";
+}
+function drawHUD() { if (classic) drawHUDRetro(); else drawHUDModern(); }
 
 // ---------- Sound: synthesised V8, skid hiss, thuds, nitro ----------
 // The V8 is made entirely in code (see tools/engine_synth.js, kept in sync
@@ -1705,7 +1952,7 @@ function initAudio() {
     g.gain.value = tg.gain.value = 0;
     return { src: mkSrc(body, A.engLp, g), tsrc: mkSrc(tin, A.tinGain, tg), g, tg };
   });
-  A.gb = makeGearbox(); A.rpm = 450; A.load = 0; A.lastT = AC.currentTime; A.prevThr = 0; A.popUntil = 0;
+  A.rpm = 450; A.load = 0; A.lastT = AC.currentTime; A.prevThr = 0; A.popUntil = 0;
 
   // noise for skids, thuds, pops and the nitro whoosh
   A.noise = AC.createBuffer(1, AC.sampleRate, AC.sampleRate);
@@ -1724,7 +1971,7 @@ function updateAudio(t) {
   A.lastT = now;
   // engine rpm from road speed through a pretend 4-speed gearbox
   const sp = Math.min(1.2, Math.abs(t.vf || 0) / Math.max(1, P.maxSpeed));
-  const gs = gearboxStep(A.gb, sp, !!t.thr, t.boost > 0, dt);
+  const gs = gearState;
   A.rpm = gs.rpm; A.load = gs.load; A.gear = gs.gear;
   const mix = engineMix(A.rpm + Math.sin(now * 9) * 12);
   A.loops.forEach((L, k) => {
@@ -1862,7 +2109,7 @@ setMode();
 resetTruck();
 buildTuning();
 buildCam();
-window.DD = { fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
+window.DD = { gear: () => gearState, fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
 let last = performance.now(), accT = 0;
 function frame(now) {
   const real = Math.min(0.05, (now - last) / 1000);
