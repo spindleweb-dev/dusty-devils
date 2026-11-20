@@ -408,6 +408,7 @@ function box(w, h, d, color, x, y, z, parent = scenery) {
   // advertising boards along the front of the stand
   for (let x = x0; x < x1; x += 20) box(19, 2.4, 0.5, ["#f2c230", "#ffffff", "#d8342c"][(x / 20) % 3 | 0], x + 10, 1.2, front + 2);
 }
+const BRIDGE_X = 215;                 // the pedestrian bridge crosses the top straight here
 // ---------- Catch fence (switched off) and sponsor banners ----------
 // A tall street-circuit style catch fence: straight up for FENCE_H, then the
 // top section angles in over the track by FENCE_LEAN. It runs along both
@@ -582,6 +583,7 @@ function buildFence() {
   for (const [a, b] of bannerSpots) {
     const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
     if (used.some(([ux, uy]) => Math.hypot(ux - mx, uy - my) < 40)) continue;
+    if (Math.abs(mx - BRIDGE_X) < 36 && my < 70) continue;          // leave room for the footbridge
     if (R() < 0.3) continue;
     used.push([mx, my]);
     const len = Math.hypot(b.x - a.x, b.y - a.y) - 0.4;
@@ -622,7 +624,7 @@ function local(out, parent, x, y, z, rx = 0, ry = 0, rz = 0) {
   return out.compose(_v, _q, _one).premultiply(parent);
 }
 class Instancer {
-  constructor(geo, max = 400) {
+  constructor(geo, max = 900) {
     this.mesh = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff }), max);
     this.mesh.count = 0;
     this.mesh.castShadow = this.mesh.receiveShadow = true;
@@ -721,8 +723,9 @@ const smooth = (a, b, x) => { const f = Math.max(0, Math.min(1, (x - a) / (b - a
 function posePerson(p, t) {
   const sit = p.sit, py = sit ? 1.25 : 2.15;
   const cheer = p.marshal ? 0 : smooth(0.3, 0.8, p.excite);
-  const jump = !sit && !p.marshal ? Math.abs(Math.sin(t * 9 + p.phase)) * 0.6 * smooth(0.4, 0.9, p.excite) : 0;
-  _e.set(0, p.yaw, 0); _q.setFromEuler(_e); _v.set(p.x, jump, p.y); _root.compose(_v, _q, _cs);
+  const jump = !sit && !p.marshal && !p.walking ? Math.abs(Math.sin(t * 9 + p.phase)) * 0.6 * smooth(0.4, 0.9, p.excite) : 0;
+  const bob = p.walking ? Math.abs(Math.sin(p.walkPh)) * 0.12 : 0;
+  _e.set(0, p.yaw, 0); _q.setFromEuler(_e); _v.set(p.x, p.hidden ? -500 : (p.h || 0) + jump + bob, p.y); _root.compose(_v, _q, _cs);
   const P = p.parts;
   I.torso.set(P.torso, local(_m, _root, 0, py + 0.72, sit ? -0.06 : 0, sit ? -0.12 : 0));
   if (P.stripe !== undefined) I.stripe.set(P.stripe, local(_m, _root, 0, py + 0.95, 0));
@@ -736,12 +739,18 @@ function posePerson(p, t) {
   for (const s of [1, -1]) {
     const th = s > 0 ? P.thighL : P.thighR, sh = s > 0 ? P.shinL : P.shinR;
     if (sit) { I.thigh.set(th, local(_m, _root, s * 0.27, py, 0, -Math.PI / 2)); I.shin.set(sh, local(_m, _root, s * 0.27, py, 0.95)); }
-    else { I.thigh.set(th, local(_m, _root, s * 0.27, py, 0)); I.shin.set(sh, local(_m, _root, s * 0.27, py - 0.95, 0)); }
+    else {
+      // standing, or walking: thighs swing from the hip, shins bend back a little
+      const sw = p.walking ? Math.sin(p.walkPh) * s : 0;
+      local(_m2, _root, s * 0.27, py, 0, sw * 0.55);
+      I.thigh.set(th, _m2);
+      I.shin.set(sh, local(_m, _m2, 0, -0.95, 0, p.walking ? Math.max(0, -sw) * 0.7 : 0));
+    }
   }
   // arms: left (+x) and right (-x). Rotating about z swings a hand outwards / up.
   const wave = Math.sin(t * (p.marshal ? 7 : 5) + p.phase);
   for (const s of [1, -1]) {
-    let rx = sit ? -0.55 : -0.08, rz = s * 0.12;                       // resting
+    let rx = sit ? -0.55 : p.walking ? Math.sin(p.walkPh) * 0.45 * s : -0.08, rz = s * 0.12;   // resting / arm swing
     if (s < 0 && p.marshal) { rx = lerp(-0.6, -0.2, p.excite); rz = lerp(-0.15, -2.4 + wave * 0.45, p.excite); }
     else if (s < 0 && p.flagObj) { rx = -0.2; rz = -2.4 + wave * (0.25 + 0.3 * p.excite); }
     else {
@@ -804,18 +813,18 @@ function buildCrowd() {
   }
   // spectator groups along the fences and in the infield
   const groups = [];
-  for (let tries = 0; tries < 3000 && groups.length < 22; tries++) {
+  for (let tries = 0; tries < 4000 && groups.length < 34; tries++) {
     const x = 10 + R() * 300, y = 8 + R() * 186;
     const nr = nearest(x, y);
     if (nr.d < HW + 10 || nr.d > HW + 24) continue;
-    if (groups.some(g => Math.hypot(g.x - x, g.y - y) < 21)) continue;
+    if (groups.some(g => Math.hypot(g.x - x, g.y - y) < 17)) continue;
     if (crowd.avoid.some(([ax, ay]) => Math.hypot(ax - x, ay - y) < 14)) continue;
     groups.push({ x, y, yaw: Math.atan2(nr.px - x, nr.py - y) });
   }
   const designs = ["chequer", "devils", "greengold", "redwhite", "bluewhite"];
   for (const g of groups) {
     const camp = R() < 0.6;
-    const count = 2 + ((R() * 3) | 0);
+    const count = 3 + ((R() * 4) | 0);
     const cs = Math.cos(g.yaw), sn = Math.sin(g.yaw);
     const at = (lx, back) => ({ x: g.x + lx * cs - back * sn, y: g.y - lx * sn - back * cs });
     const ok = q => nearest(q.x, q.y).d > HW + 7 && inView(q.x, q.y);
@@ -833,9 +842,21 @@ function buildCrowd() {
     }
     if (camp && R() < 0.8) { const q = at(((count + 1) / 2) * 2.4 * CS * (R() < 0.5 ? -1 : 1), 0.3); if (ok(q)) placeEsky(q.x, q.y, g.yaw, R() < 0.6 ? "#f4f4f4" : "#2a62c9", pick(R, ["#d8342c", "#2a62c9", "#f4f4f4"])); }
     if (camp && R() < 0.5) { const q = at((R() - 0.5) * 2, 2.2 * CS); if (ok(q)) placeUmbrella(q.x, q.y, g.yaw, pick(R, UMBCOL)); }
+    if (R() < 0.45) { const q = at(((count + 2) / 2) * 2.4 * CS * (R() < 0.5 ? -1 : 1), 1.2); if (ok(q)) placeBin(q.x, q.y, g.yaw, R); }
     crowd.avoid.push([g.x, g.y]);
   }
+  // bins along the front of the grandstand, by the pits and at the bridge stairs
+  for (const [bxp, bzp] of [[70, 0.6], [128, 0.6], [262, 0.6], [16, -2], [304, -2], [BRIDGE.x - 32, BRIDGE.zN - 4.5], [BRIDGE.x + 32, BRIDGE.zS + 4.5]])
+    if (nearest(bxp, bzp).d > HW + 5) placeBin(bxp, bzp, 0, R);
   for (const k in I) I[k].dirty();
+  CP.box.dirty();
+}
+// wheelie bins: dark green body, red (general) or yellow (recycling) lid
+function placeBin(x, z, yaw, R) {
+  const m = new THREE.Matrix4().compose(new THREE.Vector3(x, 0, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw + (R() - 0.5) * 0.6, 0)), new THREE.Vector3(1, 1, 1));
+  cpBox(m, 1.4, 2.2, 1.5, 0, 1.15, 0, "#2f4f35");
+  cpBox(m, 1.5, 0.22, 1.7, 0, 2.35, 0.08, R() < 0.5 ? "#c4321f" : "#e3b62a");
+  cpBox(m, 1.5, 0.2, 0.2, 0, 2.2, -0.8, "#1e1e1e");
 }
 // ---------- Team pit areas beside the grandstand ----------
 // Two invented race teams, each with a concrete pad, a big motorhome with a
@@ -1083,9 +1104,163 @@ function buildCarPark() {
 buildCarPark();
 
 
+// ---------- Pedestrian bridge over the top straight ----------
+// A fully enclosed footbridge: concrete deck high enough for the trucks, an
+// arched chain-link cage with steel ribs, and stairs with mesh railings down
+// to the grandstand side (north) and the infield (south). Built from the car
+// park's unit-box instancer plus a few ribbon meshes for the mesh walls.
+const BRIDGE = (() => {
+  // centre of the top straight at BRIDGE_X
+  let best = null;
+  for (const p of track.pts) if (p.y < 60 && (!best || Math.abs(p.x - BRIDGE_X) < Math.abs(best.x - BRIDGE_X))) best = p;
+  const zc = best.y, half = HW + 9;
+  return { x: BRIDGE_X, zc, zN: zc - half, zS: zc + half, deck: 11, stairs: 22 };
+})();
+function meshRibbon(points, height, mat) {
+  // vertical (or sloped) chain-link panel along a polyline of [x, y, z] points
+  const pos = [], uv = [], idx = [];
+  let u = 0;
+  points.forEach((q, i) => {
+    if (i) u += Math.hypot(q[0] - points[i - 1][0], q[1] - points[i - 1][1], q[2] - points[i - 1][2]);
+    pos.push(q[0], q[1], q[2], q[0], q[1] + height, q[2]);
+    uv.push(u / 1.6, 0, u / 1.6, height / 1.6);
+    if (i) { const a = (i - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx); g.computeVertexNormals();
+  const m = new THREE.Mesh(g, mat); m.receiveShadow = true;
+  scenery.add(m);
+}
+function buildBridge() {
+  const { x: bx, zc, zN, zS, deck: Y, stairs: NS } = BRIDGE;
+  const I4 = new THREE.Matrix4();
+  const span = zS - zN;
+  const meshMat = new THREE.MeshLambertMaterial({ map: chainLinkTexture(), alphaTest: 0.3, side: THREE.DoubleSide, color: "#cfd4d8" });
+  const STEEL = "#3d5a73", CONC = "#a3a29c";
+  // deck, side girders, landings
+  cpBox(I4, 6.4, 0.6, span, bx, Y - 0.3, zc, CONC);
+  for (const s of [-1, 1]) cpBox(I4, 0.5, 1.5, span, bx + s * 3.3, Y - 0.6, zc, STEEL);
+  cpBox(I4, 8.6, 0.6, 3.6, bx - 1.1, Y - 0.3, zN - 1.5, CONC);         // north landing
+  cpBox(I4, 8.6, 0.6, 3.6, bx + 1.1, Y - 0.3, zS + 1.5, CONC);         // south landing
+  // columns
+  for (const [cx, cz] of [[bx - 2.8, zN + 0.6], [bx + 2.8, zN + 0.6], [bx - 4.8, zN - 2.8], [bx - 4.8, zN - 0.2],
+                          [bx - 2.8, zS - 0.6], [bx + 2.8, zS - 0.6], [bx + 4.8, zS + 2.8], [bx + 4.8, zS + 0.2]])
+    cpBox(I4, 0.8, Y - 0.6, 0.8, cx, (Y - 0.6) / 2, cz, STEEL);
+  // arched cage: walls 2.4 high, then a half-circle roof of radius 3.1
+  const prof = [[-3.1, 0], [-3.1, 2.4]];
+  for (let k = 1; k < 12; k++) { const a = Math.PI - k / 12 * Math.PI; prof.push([Math.cos(a) * 3.1, 2.4 + Math.sin(a) * 3.1]); }
+  prof.push([3.1, 2.4], [3.1, 0]);
+  {
+    const pos = [], uv = [], idx = [];
+    let u = 0;
+    prof.forEach((q, i) => {
+      if (i) u += Math.hypot(q[0] - prof[i - 1][0], q[1] - prof[i - 1][1]);
+      pos.push(bx + q[0], Y + q[1], zN, bx + q[0], Y + q[1], zS);
+      uv.push(u / 1.6, 0, u / 1.6, span / 1.6);
+      if (i) { const a = (i - 1) * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx); g.computeVertexNormals();
+    const cage = new THREE.Mesh(g, meshMat); cage.receiveShadow = true; cage.castShadow = true;
+    scenery.add(cage);
+  }
+  // steel ribs around the cage every ~4 units
+  for (let z = zN; z <= zS + 0.01; z += span / Math.round(span / 4)) {
+    for (let i = 1; i < prof.length; i++) {
+      const [x0, y0] = prof[i - 1], [x1, y1] = prof[i];
+      cpBox(I4, Math.hypot(x1 - x0, y1 - y0) + 0.05, 0.2, 0.2, bx + (x0 + x1) / 2, Y + (y0 + y1) / 2, z, STEEL, 0, 0, Math.atan2(y1 - y0, x1 - x0));
+    }
+  }
+  // stairs: north ones run down to the west, south ones down to the east
+  const run = NS, rise = Y / NS, slope = Math.atan2(Y, run);
+  for (const [dir, x0, z] of [[-1, bx - 5.4, zN - 1.5], [1, bx + 5.4, zS + 1.5]]) {
+    for (let i = 0; i < NS; i++) cpBox(I4, 1.05, 0.25, 3.0, x0 + dir * (i + 0.5), Y - (i + 1) * rise - 0.125, z, CONC);
+    for (const s of [-1.6, 1.6]) {
+      cpBox(I4, Math.hypot(run, Y), 0.5, 0.2, x0 + dir * run / 2, Y / 2 - 0.3, z + s, STEEL, 0, 0, -dir * slope);
+      cpBox(I4, Math.hypot(run, Y), 0.14, 0.14, x0 + dir * run / 2, Y / 2 + 2.6, z + s, STEEL, 0, 0, -dir * slope);   // handrail
+      meshRibbon([[x0, Y, z + s], [x0 + dir * run, 0, z + s]], 2.6, meshMat);
+    }
+  }
+  // keep crowds and bushes off the stairs and landings
+  for (let i = 0; i <= 6; i++) {
+    crowd.avoid.push([bx - 5 - i * 4, zN - 1.5], [bx + 5 + i * 4, zS + 1.5]);
+  }
+  CP.box.dirty();
+}
+buildBridge();
+
 buildCrowd();
+// ---------- Walkers: people strolling about and crossing the bridge ----------
+// "pace" walkers stroll a path, pause at the ends and turn back; "cross"
+// walkers appear at one end of the bridge route, cross it and wander off,
+// then turn up again a little later.
+const walkers = [];
+function makeWalker(path, mode, R) {
+  const p = makePerson({ x: path[0][0], y: path[0][2], yaw: 0, sit: false, can: R() < 0.3, hat: R() < 0.45 ? "cap" : R() < 0.5 ? "wide" : null }, R);
+  const cum = [0];
+  for (let i = 1; i < path.length; i++) cum.push(cum[i - 1] + Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1], path[i][2] - path[i - 1][2]));
+  Object.assign(p, { h: 0, walking: false, walkPh: R() * 6 });
+  p.wk = { path, cum, len: cum[cum.length - 1], s: R() * cum[cum.length - 1], dir: R() < 0.5 ? 1 : -1, speed: 2.6 + R() * 1.2, pause: R() * 4, mode, R };
+  if (mode === "cross") { p.hidden = true; p.wk.pause = R() * 6; }
+  walkers.push(p);
+}
+function updateWalkers(dt) {
+  for (const p of walkers) {
+    const w = p.wk;
+    if (w.pause > 0) {
+      w.pause -= dt; p.walking = false;
+      if (w.pause <= 0 && p.hidden) {                       // turn up at one end
+        p.hidden = false; w.dir = Math.random() < 0.5 ? 1 : -1; w.s = w.dir > 0 ? 0 : w.len;
+        w.speed = 2.6 + Math.random() * 1.2;
+      }
+      if (w.pause > 0 || p.hidden) continue;
+    }
+    w.s += w.dir * w.speed * dt;
+    if (w.s <= 0 || w.s >= w.len) {
+      w.s = Math.max(0, Math.min(w.len, w.s));
+      if (w.mode === "cross") { p.hidden = true; w.pause = 2 + Math.random() * 7; }
+      else { w.dir *= -1; w.pause = 1 + Math.random() * 4; }
+      p.walking = false;
+      continue;
+    }
+    if (w.mode === "pace" && Math.random() < dt * 0.04) w.pause = 1 + Math.random() * 2;   // stop for a look now and then
+    let i = 1;
+    while (i < w.cum.length - 1 && w.cum[i] < w.s) i++;
+    const a = w.path[i - 1], b = w.path[i], f = (w.s - w.cum[i - 1]) / (w.cum[i] - w.cum[i - 1] || 1);
+    const dx = (b[0] - a[0]) * w.dir, dz = (b[2] - a[2]) * w.dir, hl = Math.hypot(dx, dz) || 1;
+    // keep left so people pass each other on the bridge
+    p.x = a[0] + (b[0] - a[0]) * f - dz / hl * 0.9;
+    p.y = a[2] + (b[2] - a[2]) * f + dx / hl * 0.9;
+    p.h = a[1] + (b[1] - a[1]) * f;
+    p.yaw = Math.atan2(dx, dz);
+    p.walking = true;
+    p.walkPh += dt * w.speed * 2.3;
+  }
+}
+function buildWalkers() {
+  const R = rng(55);
+  const clear = pts => pts.every(([x, , z]) => nearest(x, z).d > HW + 7);
+  const { x: bx, zN, zS, deck: Y, stairs: NS } = BRIDGE;
+  // over the bridge: ground, up the stairs, across inside the cage, down, ground
+  const bridgePath = [[bx - 5.4 - NS - 7, 0, zN - 1.5], [bx - 5.4 - NS, 0, zN - 1.5], [bx - 5.4, Y, zN - 1.5], [bx, Y, zN - 1.5],
+                      [bx, Y, zS + 1.5], [bx + 5.4, Y, zS + 1.5], [bx + 5.4 + NS, 0, zS + 1.5], [bx + 5.4 + NS + 7, 0, zS + 1.5]];
+  for (let k = 0; k < 6; k++) makeWalker(bridgePath, "cross", R);
+  // along the front of the grandstand, pit to pit
+  const front = [[22, 0, 3], [298, 0, 3]];
+  if (clear(front)) for (let k = 0; k < 3; k++) makeWalker(front, "pace", R);
+  // through the left infield
+  const infield = [[72, 0, 104], [104, 0, 124], [138, 0, 128]];
+  if (clear(infield)) for (let k = 0; k < 2; k++) makeWalker(infield, "pace", R);
+}
+buildWalkers();
+
 
 function updateCrowd(dt) {
+  updateWalkers(dt);
   const t = raceTime, act = racers.filter(isRacing);
   crowd.hype = Math.max(0, crowd.hype - dt);
   for (const p of crowd.people) {
@@ -2535,7 +2710,7 @@ setMode();
 resetTruck();
 buildTuning();
 buildCam();
-window.DD = { cashSpot: () => cashSpots, CP, race, racers, startRace, gear: () => gearState, fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
+window.DD = { walkers, BRIDGE, cashSpot: () => cashSpots, CP, race, racers, startRace, gear: () => gearState, fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
 let last = performance.now(), accT = 0;
 function frame(now) {
   const real = Math.min(0.05, (now - last) / 1000);
