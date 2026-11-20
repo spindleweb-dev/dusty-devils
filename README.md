@@ -25,6 +25,7 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
    - ✅ Nitro (Space) plus nitro-bottle and cash pickups
    - ✅ Tyre walls stacked 4 high, with sponsor banners on legs behind them (made-up sponsors). A catch fence was tried and switched off (`SHOW_FENCE`)
    - ✅ Team pit areas beside the grandstand (invented teams Voltroo Racing and Irongum Racing): motorhomes with awnings, gazebos, spare tyres, tool chests, fuel drums, parked team trucks and mechanics
+   - ✅ Crowd car park behind the grandstand: rows of farm utes, 4WDs, sedans, flatbed farm trucks with hay and the odd tractor
    - ✅ Modern dashboard HUD in Enhanced mode (lap, lap timer with last/best/delta, speedo, rev bar, shift light, gear, cash, nitro cells); Classic mode keeps the retro HUD
    - ✅ Crowds: campers in chairs with hats, beers, eskies and umbrellas; flag-waving fans; corner marshals with yellow flags. They watch and cheer the truck.
 2. ✅ Races: 4 laps, start lights, positions, leaderboard, results and prize money

@@ -959,6 +959,130 @@ function buildPits() {
 }
 buildPits();
 
+// ---------- Crowd car park behind the grandstand ----------
+// A dusty paddock with rows of the spectators' vehicles: farm utes (bull bars,
+// hay bales, toolboxes), 4WD wagons, sedans, a few old flatbed farm trucks
+// and the odd tractor. Every part is a scaled unit box or wheel drawn through
+// two InstancedMeshes, so ~270 vehicles cost two draw calls.
+const CP = {
+  box: new Instancer(new THREE.BoxGeometry(1, 1, 1), 4200),
+  wheel: new Instancer(new THREE.CylinderGeometry(1, 1, 1, 10).rotateX(Math.PI / 2), 2200)
+};
+const _cpM = new THREE.Matrix4(), _cpQ = new THREE.Quaternion(), _cpE = new THREE.Euler(), _cpP = new THREE.Vector3(), _cpS = new THREE.Vector3();
+function cpPart(inst, root, x, y, z, sx, sy, sz, color, rx = 0, ry = 0, rz = 0) {
+  if (inst.mesh.count >= inst.mesh.instanceMatrix.count) return;
+  _cpE.set(rx, ry, rz); _cpQ.setFromEuler(_cpE); _cpP.set(x, y, z); _cpS.set(sx, sy, sz);
+  _cpM.compose(_cpP, _cpQ, _cpS).premultiply(root);
+  inst.add(_cpM, color);
+}
+const cpBox = (root, w, h, d, x, y, z, col, rx, ry, rz) => cpPart(CP.box, root, x, y, z, w, h, d, col, rx, ry, rz);
+const cpWheel = (root, x, z, r, wd = 0.9, y = r, ry = 0) => cpPart(CP.wheel, root, x, y, z, r, r, wd, "#161616", 0, ry, 0);
+const GLASS = "#25313b";
+// vehicles are built facing +x
+function vUte(root, col, R) {
+  cpBox(root, 10.4, 1.5, 4.4, 0, 1.75, 0, col);                       // body
+  cpBox(root, 3.5, 1.8, 4.2, 0.9, 3.4, 0, col);                        // cab
+  cpBox(root, 3.2, 1.0, 4.28, 0.9, 3.55, 0, GLASS);                    // side windows
+  cpBox(root, 0.12, 1.2, 3.8, 2.68, 3.45, 0, GLASS, 0, 0, 0.35);       // windscreen
+  cpBox(root, 4.4, 0.9, 4.4, -2.9, 2.9, 0, col);                       // tray sides
+  cpBox(root, 4.0, 0.05, 4.0, -2.9, 3.37, 0, "#2b2b2b");               // open tray
+  if (R() < 0.55) cpBox(root, 0.35, 1.3, 4.2, 5.35, 1.9, 0, "#1d1d1d");   // bull bar
+  const load = R();
+  if (load < 0.25) cpBox(root, 2.4, 1.2, 1.9, -2.9, 4.0, 0, "#d9c27a");          // hay bale
+  else if (load < 0.42) cpBox(root, 1.2, 1.4, 4.0, -1.4, 4.1, 0, "#c9c9c9");     // toolbox
+  else if (load < 0.5) cpBox(root, 2.6, 1.8, 3.4, -3.0, 4.3, 0, "#9a9a9a");      // dog box
+  for (const wx of [3.3, -3.4]) for (const wz of [-2.15, 2.15]) cpWheel(root, wx, wz, 1.05);
+}
+function vWagon(root, col, R) {
+  cpBox(root, 10, 2.0, 4.5, 0, 2.1, 0, col);
+  cpBox(root, 6.8, 1.8, 4.3, -0.7, 4.0, 0, col);
+  cpBox(root, 6.5, 1.0, 4.38, -0.7, 4.1, 0, GLASS);
+  cpBox(root, 0.12, 1.3, 3.9, 2.75, 4.0, 0, GLASS, 0, 0, 0.3);
+  if (R() < 0.6) cpBox(root, 5.4, 0.25, 3.9, -0.8, 5.05, 0, "#1d1d1d");   // roof rack
+  if (R() < 0.5) cpBox(root, 0.35, 1.5, 4.3, 5.1, 2.1, 0, "#1d1d1d");     // bull bar
+  cpWheel(root, -5.3, 0, 1.0, 0.6, 2.7, Math.PI / 2);                     // spare on the back
+  for (const wx of [3.2, -3.2]) for (const wz of [-2.2, 2.2]) cpWheel(root, wx, wz, 1.2);
+}
+function vSedan(root, col) {
+  cpBox(root, 9.4, 1.3, 4.2, 0, 1.55, 0, col);
+  cpBox(root, 4.6, 1.3, 3.9, -0.4, 2.85, 0, col);
+  cpBox(root, 4.3, 0.85, 3.98, -0.4, 2.9, 0, GLASS);
+  for (const wx of [3.0, -3.0]) for (const wz of [-2.0, 2.0]) cpWheel(root, wx, wz, 0.9);
+}
+function vFarmTruck(root, col, R) {
+  cpBox(root, 13, 0.8, 3.6, 0, 1.6, 0, "#2a2a2a");                     // chassis
+  cpBox(root, 3.6, 3.4, 4.8, 4.6, 3.3, 0, col);                        // cab
+  cpBox(root, 0.12, 1.4, 4.2, 6.42, 4.1, 0, GLASS);
+  cpBox(root, 3.0, 1.0, 4.86, 4.4, 4.2, 0, GLASS);
+  cpBox(root, 9, 0.4, 5, -2, 2.3, 0, "#8a6a44");                       // timber tray
+  for (const sx of [-6.2, -2, 2.2]) for (const sz of [-2.4, 2.4]) cpBox(root, 0.25, 1.6, 0.25, sx, 3.2, sz, "#5a4632");
+  const bales = 1 + ((R() * 3) | 0);
+  for (let k = 0; k < bales; k++) cpBox(root, 2.6, 1.3, 2.0, -5 + k * 2.9, 3.15, (k % 2 ? -1 : 1) * 1.1, "#d9c27a");
+  for (const wx of [4.6, -3.2, -5.2]) for (const wz of [-2.3, 2.3]) cpWheel(root, wx, wz, 1.2);
+}
+function vTractor(root, col) {
+  cpBox(root, 4.8, 1.8, 2.2, 1.2, 2.6, 0, col);                        // engine
+  cpBox(root, 2.6, 1.2, 3.0, -1.4, 2.4, 0, col);                       // rear body / fenders
+  cpBox(root, 3.0, 0.2, 3.2, -1.4, 6.0, 0, "#e8e8e8");                 // canopy
+  for (const px of [-2.7, -0.1]) for (const pz of [-1.4, 1.4]) cpBox(root, 0.15, 3.0, 0.15, px, 4.5, pz, "#333333");
+  cpBox(root, 0.25, 1.5, 0.25, 2.6, 4.2, 0.5, "#333333");              // exhaust stack
+  for (const wz of [-1.9, 1.9]) cpWheel(root, -1.6, wz, 2.0, 1.1);
+  for (const wz of [-1.4, 1.4]) cpWheel(root, 2.6, wz, 1.1, 0.7);
+}
+function gravelTexture() {
+  const c = document.createElement("canvas"); c.width = c.height = 256;
+  const x = c.getContext("2d"), R = rng(4);
+  x.fillStyle = "#a18e6c"; x.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 3000; i++) {
+    x.fillStyle = R() < 0.5 ? "rgba(70,55,35,.25)" : "rgba(220,200,160,.25)";
+    x.fillRect(R() * 256, R() * 256, 1 + R() * 2, 1 + R() * 2);
+  }
+  for (let i = 0; i < 60; i++) {           // dry grass tufts
+    x.fillStyle = "rgba(110,130,60,.35)";
+    x.beginPath(); x.arc(R() * 256, R() * 256, 2 + R() * 5, 0, 7); x.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function buildCarPark() {
+  const R = rng(77);
+  const tex = gravelTexture(); tex.repeat.set(22, 3.2);
+  const lot = new THREE.Mesh(new THREE.PlaneGeometry(440, 64), new THREE.MeshLambertMaterial({ map: tex }));
+  lot.rotation.x = -Math.PI / 2; lot.position.set(160, 0.04, -66); lot.receiveShadow = true;
+  scenery.add(lot);
+  const UTE = ["#ecebe6", "#ecebe6", "#ecebe6", "#b9bcbf", "#8e2a22", "#2a3f6e", "#3e5a34", "#c9b48a", "#1e1e1e", "#d0d0cc"];
+  const WAG = ["#ecebe6", "#c9b48a", "#b9bcbf", "#5a5f63", "#2a3f6e", "#ecebe6"];
+  const SED = ["#b9bcbf", "#8e2a22", "#2a3f6e", "#1e1e1e", "#ecebe6", "#6a7d8c", "#7a3f8a"];
+  const root = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+  // two pairs of back-to-back rows, with an aisle between the pairs
+  const rows = [[-41, 1], [-52.5, -1], [-71, 1], [-82.5, -1]];
+  rows.forEach(([z, face], ri) => {
+    for (let x = -50; x <= 370; x += 5.6) {
+      if (R() < 0.12) continue;                                          // empty spaces
+      const r = R();
+      const kind = ri === 0 && r < 0.07 ? "farm" : r < 0.03 ? "tractor" : r < 0.45 ? "ute" : r < 0.72 ? "wagon" : r < 0.9 ? "sedan" : "ute";
+      const yaw = (face > 0 ? -Math.PI / 2 : Math.PI / 2) + (R() - 0.5) * 0.08;   // nose to the aisle
+      e.set(0, yaw, 0); q.setFromEuler(e);
+      p.set(x + (R() - 0.5) * 0.4, 0, z + (R() - 0.5) * 0.6 + (kind === "farm" ? 1.5 : 0));
+      root.compose(p, q, one);
+      if (kind === "ute") vUte(root, pick(R, UTE), R);
+      else if (kind === "wagon") vWagon(root, pick(R, WAG), R);
+      else if (kind === "sedan") vSedan(root, pick(R, SED));
+      else if (kind === "farm") vFarmTruck(root, pick(R, ["#2a5db0", "#8e2a22", "#3e5a34", "#c9b48a"]), R);
+      else vTractor(root, pick(R, ["#c4321f", "#2a5db0", "#e07b28"]));
+    }
+  });
+  CP.box.dirty(); CP.wheel.dirty();
+  // a few people wandering between the rows
+  for (let k = 0; k < 10; k++) {
+    const x = 10 + R() * 300, z = R() < 0.6 ? -61.8 + (R() - 0.5) * 3 : -34;
+    makePerson({ x, y: z, yaw: R() * 6.28, sit: false, can: R() < 0.5, hat: R() < 0.5 ? "cap" : "wide" }, R);
+  }
+}
+buildCarPark();
+
+
 buildCrowd();
 
 function updateCrowd(dt) {
@@ -1266,7 +1390,7 @@ function fitCamera() {
     camera.lookAt(target);
     camera.updateMatrixWorld();
   };
-  const topLimit = 0.6;      // leave room for the HUD panels, grandstand and team pits
+  const topLimit = 0.44;     // leave room for the HUD panels, grandstand, team pits and car park
   for (let iter = 0; iter < 8; iter++) {
     let lo = 20, hi = 5000;
     for (let k = 0; k < 40; k++) {
@@ -2357,7 +2481,7 @@ setMode();
 resetTruck();
 buildTuning();
 buildCam();
-window.DD = { race, racers, startRace, gear: () => gearState, fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
+window.DD = { CP, race, racers, startRace, gear: () => gearState, fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
 let last = performance.now(), accT = 0;
 function frame(now) {
   const real = Math.min(0.05, (now - last) / 1000);
