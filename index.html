@@ -404,6 +404,134 @@ function box(w, h, d, color, x, y, z, parent = scenery) {
   // advertising boards along the front of the stand
   for (let x = x0; x < x1; x += 20) box(19, 2.4, 0.5, ["#f2c230", "#ffffff", "#d8342c"][(x / 20) % 3 | 0], x + 10, 1.2, front + 2);
 }
+// ---------- Safety fence behind the tyres, with sponsor banners ----------
+// A chain-link fence on steel posts runs along both sides of the track,
+// just outside the tyre walls, wherever it doesn't cut into another part of
+// the track. Banners for made-up sponsors hang on some of the spans.
+const FENCE_OFF = HW + 5.8, FENCE_H = 4.2, POST_EVERY = 4;   // posts every 4 track samples (6 units)
+const fence = { runs: [] };
+function chainLinkTexture() {
+  const c = document.createElement("canvas"); c.width = c.height = 64;
+  const x = c.getContext("2d");
+  x.strokeStyle = "rgba(205,210,215,0.95)"; x.lineWidth = 3;
+  x.beginPath(); x.moveTo(0, 0); x.lineTo(64, 64); x.moveTo(64, 0); x.lineTo(0, 64); x.stroke();
+  x.beginPath(); x.moveTo(-32, 32); x.lineTo(32, -32); x.moveTo(32, 96); x.lineTo(96, 32); x.moveTo(-32, 32); x.lineTo(32, 96); x.moveTo(32, -32); x.lineTo(96, 32); x.stroke();
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function bannerTexture(b) {
+  const c = document.createElement("canvas"); c.width = 512; c.height = 80;
+  const x = c.getContext("2d");
+  x.fillStyle = b.bg; x.fillRect(0, 0, 512, 80);
+  x.fillStyle = b.band; x.fillRect(0, 0, 512, 7); x.fillRect(0, 73, 512, 7);
+  if (b.tread) { x.fillStyle = b.band; for (let i = 0; i < 512; i += 24) { x.beginPath(); x.moveTo(i, 7); x.lineTo(i + 12, 18); x.lineTo(i + 24, 7); x.fill(); x.beginPath(); x.moveTo(i, 73); x.lineTo(i + 12, 62); x.lineTo(i + 24, 73); x.fill(); } }
+  x.font = "bold 40px 'Trebuchet MS', 'Arial Black', sans-serif"; x.textAlign = "center"; x.textBaseline = "middle";
+  x.fillStyle = "rgba(0,0,0,.35)"; x.fillText(b.text, 258, 43);
+  x.fillStyle = b.fg; x.fillText(b.text, 256, 41);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+// all sponsors are invented for the game
+const SPONSORS = [
+  { text: "DUSTY DEVILS", bg: "#c22e22", fg: "#ffffff", band: "#ffc861" },
+  { text: "DUSTBOWL TYRES", bg: "#161616", fg: "#ffffff", band: "#e9e4d8", tread: true },
+  { text: "IRONGUM MOTOR OIL", bg: "#1f6a3a", fg: "#f2c230", band: "#f2c230" },
+  { text: "BULLDUST FUEL CO.", bg: "#f07a1a", fg: "#1a1a1a", band: "#1a1a1a" },
+  { text: "SPINDLE NITRO", bg: "#1f4fb8", fg: "#ffffff", band: "#7cc0ff" },
+  { text: "WOMBAT WINCHES", bg: "#efe2c4", fg: "#5a3a20", band: "#8b5a2b" },
+  { text: "THUNDER GULLY FM 98.7", bg: "#3aa0d8", fg: "#ffffff", band: "#1f4f7a" }
+];
+function buildFence() {
+  const p = track.pts, n = p.length;
+  const meshTex = chainLinkTexture();
+  const meshMat = new THREE.MeshLambertMaterial({ map: meshTex, alphaTest: 0.35, side: THREE.DoubleSide, color: "#c8ccd0" });
+  const steel = "#8c9196";
+  const posts = [], rails = [];
+  for (const side of [-1, 1]) {
+    // fence line points (one per post), split into runs where the fence fits
+    let run = [];
+    const flush = () => { if (run.length > 1) fence.runs.push({ side, pts: run }); run = []; };
+    for (let k = 0; k <= n; k += POST_EVERY) {
+      const q = p[k % n];
+      const x = q.x - q.ty * side * FENCE_OFF, y = q.y + q.tx * side * FENCE_OFF;
+      const ok = nearest(x, y).d > HW + 3.5 && x > GX0 + 2 && x < GX0 + GW - 2 && y > GY0 + 2;
+      if (ok) run.push({ x, y, tx: q.tx, ty: q.ty, k: k % n });
+      else flush();
+    }
+    flush();
+  }
+  // a run that ends where the next one starts (the loop's seam) is joined up
+  const bannerSpots = [];
+  for (const r of fence.runs) {
+    const pts = r.pts;
+    // chain-link panel as one ribbon per run
+    const pos = [], uv = [], idx = [];
+    let u = 0;
+    pts.forEach((q, i) => {
+      if (i) u += Math.hypot(q.x - pts[i - 1].x, q.y - pts[i - 1].y);
+      pos.push(q.x, 0.15, q.y, q.x, FENCE_H, q.y);
+      uv.push(u / 1.6, 0, u / 1.6, FENCE_H / 1.6);
+      if (i) { const a = (i - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx); g.computeVertexNormals();
+    const m = new THREE.Mesh(g, meshMat); m.receiveShadow = true;
+    scenery.add(m);
+    pts.forEach((q, i) => {
+      posts.push(q);
+      if (i) rails.push([pts[i - 1], q]);
+      // banners need a straight stretch of three spans (~18 units)
+      if (i >= 3 && i % 2 === 0) { const a = pts[i - 3]; if (Math.abs(Math.atan2(a.tx * q.ty - a.ty * q.tx, a.tx * q.tx + a.ty * q.ty)) < 0.12) bannerSpots.push([a, q, r.side]); }
+    });
+  }
+  // posts and rails (instanced)
+  const postMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.22, FENCE_H + 0.3, 6), new THREE.MeshLambertMaterial({ color: "#6f757b" }), posts.length);
+  posts.forEach((q, i) => postMesh.setMatrixAt(i, new THREE.Matrix4().makeTranslation(q.x, (FENCE_H + 0.3) / 2, q.y)));
+  postMesh.castShadow = true; scenery.add(postMesh);
+  const railMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.16, 0.16), new THREE.MeshLambertMaterial({ color: steel }), rails.length * 2);
+  const mm = new THREE.Matrix4(), qq = new THREE.Quaternion(), sc = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+  rails.forEach(([a, b], i) => {
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    qq.setFromAxisAngle(up, -Math.atan2(b.y - a.y, b.x - a.x));
+    sc.set(len, 1, 1);
+    for (const [j, h] of [[0, FENCE_H], [1, FENCE_H * 0.5]]) {
+      mm.compose(new THREE.Vector3((a.x + b.x) / 2, h, (a.y + b.y) / 2), qq, sc);
+      railMesh.setMatrixAt(i * 2 + j, mm);
+    }
+  });
+  railMesh.castShadow = true; scenery.add(railMesh);
+  // sponsor banners on about a third of the spots, spread around the track
+  const R = rng(5);
+  const used = [];
+  let si = 0;
+  const bannerMats = SPONSORS.map(b => new THREE.MeshLambertMaterial({ map: bannerTexture(b) }));
+  const edge = new THREE.MeshLambertMaterial({ color: "#dddddd" });
+  for (const [a, b, side] of bannerSpots) {
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    if (used.some(([ux, uy]) => Math.hypot(ux - mx, uy - my) < 40)) continue;
+    if (R() < 0.3) continue;
+    used.push([mx, my]);
+    const len = Math.hypot(b.x - a.x, b.y - a.y) - 0.4;
+    const mat = bannerMats[si++ % bannerMats.length];
+    const ban = new THREE.Mesh(new THREE.BoxGeometry(len, 3.0, 0.1), [edge, edge, edge, edge, mat, mat]);
+    // hang it on the track side of the fence
+    const nx = a.ty * side, ny = -a.tx * side;            // points from the fence back towards the track
+    ban.position.set(mx + nx * 0.2, 2.35, my + ny * 0.2);
+    // lean the board back (like trackside A-frame boards) so its face tilts up towards the camera,
+    // which sits to the south (+z) looking down: the top always leans north.
+    const yaw = -Math.atan2(b.y - a.y, b.x - a.x);
+    const nz = Math.cos(yaw);                                 // z part of the board's +z face normal
+    ban.rotation.set(-0.62 * Math.sign(nz || 1) * Math.min(1, Math.abs(nz) * 1.5), yaw, 0, "YXZ");
+    ban.castShadow = true;
+    scenery.add(ban);
+  }
+  fence.banners = used.length;
+}
+buildFence();
+
 // ---------- Crowd: campers, fans with flags, track marshals ----------
 // People are built from simple boxes and spheres. Each body part is one
 // InstancedMesh shared by everyone, so ~80 animated people cost only a
@@ -1662,7 +1790,7 @@ setMode();
 resetTruck();
 buildTuning();
 buildCam();
-window.DD = { crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
+window.DD = { fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
 let last = performance.now(), accT = 0;
 function frame(now) {
   const real = Math.min(0.05, (now - last) / 1000);
