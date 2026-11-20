@@ -24,7 +24,7 @@
 //     the middle copy is in steady state.
 // ============================================================
 // ENGINE-SYNTH-START
-const ENGINE_LOOP_RPMS = [580, 1200, 2100, 3100, 4200, 5400];   // big, low-revving monster engine
+const ENGINE_LOOP_RPMS = [500, 1100, 2000, 3000, 4100, 5400];   // big, low-revving monster engine
 
 function engineHash(a, b) {
   let h = (a * 374761393 + b * 668265263) | 0;
@@ -52,17 +52,18 @@ function makeBiquad(type, f, q, sr) {
 function makeEngineLoop(sr, rpm, seed = 7) {
   const cycleSec = 120 / rpm;                          // two crank turns
   // near idle: big-cam lope, so make the loop longer so the lumpiness doesn't repeat too obviously
-  const idleness = Math.max(0, Math.min(1, (1500 - rpm) / 900));
+  const idleness = Math.max(0, Math.min(1, (1500 - rpm) / 1000));
   const cycles = Math.max(4, Math.round((1.1 + 1.1 * idleness) / cycleSec));
   const n = Math.round(cycles * cycleSec * sr);
   const fires = cycles * 8;
   const ORDER = [1, 8, 4, 3, 6, 5, 7, 2];
-  const lope = 0.07 + 0.3 * idleness;                  // idle is far lumpier than high revs
+  const lope = 0.07 + 0.12 * idleness;                 // a little cylinder-to-cylinder roughness
   const cylAmp = [];
   for (let c = 1; c <= 8; c++) cylAmp[c] = 1 + (engineHash(seed, c) - 0.5) * 2 * lope;
-  // cam overlap makes a couple of cylinders lazy at idle, which gives the loping "lump-lump" beat
-  cylAmp[3] *= 1 - 0.38 * idleness;
-  cylAmp[6] *= 1 - 0.22 * idleness;
+  // Big-cam idle rhythm: in each engine cycle (8 firings) you mostly hear a big
+  // thump and a smaller one right after it ("da-d"), then the rest drop back,
+  // leaving a gap before the next pair. It fades away as the revs rise.
+  const IDLE_PATTERN = [1.0, 0.68, 0.2, 0.28, 0.22, 0.3, 0.2, 0.26];
 
   // excitation for each bank, wrapped so the loop is seamless
   const ex = [new Float32Array(n), new Float32Array(n)];
@@ -74,7 +75,7 @@ function makeEngineLoop(sr, rpm, seed = 7) {
     const bank = cyl % 2 ? 0 : 1;
     const jitT = (engineHash(seed + 11, k) - 0.5) * (0.0003 + 0.0016 * idleness) * sr;
     const start = k / fires * n + jitT;
-    const amp = cylAmp[cyl] * (1 + (engineHash(seed + 23, k) - 0.5) * (0.12 + 0.3 * idleness));
+    const amp = cylAmp[cyl] * (1 - idleness * (1 - IDLE_PATTERN[k % 8])) * (1 + (engineHash(seed + 23, k) - 0.5) * (0.12 + 0.15 * idleness));
     const len = Math.ceil(width * 4);
     for (let j = 0; j < len; j++) {
       const x = j / width;
@@ -155,7 +156,7 @@ function engineMix(rpm) {
 // The supercharger whine is a separate live layer: pitch = rpm / 60 * BLOWER_RATIO.
 const BLOWER_RATIO = 14;
 const GEAR_TOPS = [0.32, 0.55, 0.8, 1.2];   // speed reached at the red line in each gear
-function makeGearbox() { return { gear: 0, rpm: 580, cut: 0, blip: 0, shifted: 0, since: 1 }; }
+function makeGearbox() { return { gear: 0, rpm: 500, cut: 0, blip: 0, shifted: 0, since: 1 }; }
 function gearboxStep(g, sp, thr, boost, dt) {
   const inGear = i => 800 + Math.max(0, sp) / GEAR_TOPS[i] * 4500;
   g.shifted = 0;
@@ -165,10 +166,10 @@ function gearboxStep(g, sp, thr, boost, dt) {
   else if (g.gear > 0 && g.since > 0.35 && inGear(g.gear) < (thr ? 2200 : 1400)) { g.gear--; g.cut = 0.1; g.blip = 0.16; g.shifted = -1; g.since = 0; }
   let target = inGear(g.gear);
   if (g.gear === 0 && thr && sp < 0.12) target = Math.max(target, 2000 + sp * 8000);   // launch / wheelspin
-  if (g.gear === 0 && !thr && sp < 0.06) target = 580;                                 // clutch in, idling
+  if (g.gear === 0 && !thr && sp < 0.06) target = 500;                                 // clutch in, idling
   if (boost) target += 400;
   if (g.blip > 0) { g.blip -= dt; target += 700; }
-  target = Math.max(560, Math.min(5900, target));
+  target = Math.max(480, Math.min(5900, target));
   const rate = g.cut > 0 ? 14 : target > g.rpm ? 6 : 3;
   g.rpm += (target - g.rpm) * Math.min(1, dt * rate);
   const load = g.blip > 0 || (thr && g.cut <= 0) ? 1 : 0;
