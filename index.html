@@ -431,26 +431,71 @@ function chainLinkTexture() {
   return t;
 }
 function bannerTexture(b) {
-  const c = document.createElement("canvas"); c.width = 512; c.height = 80;
+  // 3:1 sign: optional icon on the left, big brand name, small tagline
+  const W2 = 600, H2 = 200;
+  const c = document.createElement("canvas"); c.width = W2; c.height = H2;
   const x = c.getContext("2d");
-  x.fillStyle = b.bg; x.fillRect(0, 0, 512, 80);
-  x.fillStyle = b.band; x.fillRect(0, 0, 512, 7); x.fillRect(0, 73, 512, 7);
-  if (b.tread) { x.fillStyle = b.band; for (let i = 0; i < 512; i += 24) { x.beginPath(); x.moveTo(i, 7); x.lineTo(i + 12, 18); x.lineTo(i + 24, 7); x.fill(); x.beginPath(); x.moveTo(i, 73); x.lineTo(i + 12, 62); x.lineTo(i + 24, 73); x.fill(); } }
-  x.font = "bold 40px 'Trebuchet MS', 'Arial Black', sans-serif"; x.textAlign = "center"; x.textBaseline = "middle";
-  x.fillStyle = "rgba(0,0,0,.35)"; x.fillText(b.text, 258, 43);
-  x.fillStyle = b.fg; x.fillText(b.text, 256, 41);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  x.fillStyle = b.bg; x.fillRect(0, 0, W2, H2);
+  x.fillStyle = b.band; x.fillRect(0, 0, W2, 12); x.fillRect(0, H2 - 12, W2, 12);
+  let left = 24;
+  if (b.icon) {
+    const cx = 105, cy = 100;
+    x.save();
+    if (b.icon === "tyre") {
+      x.fillStyle = "#111"; x.beginPath(); x.arc(cx, cy, 70, 0, 7); x.fill();
+      x.strokeStyle = b.accent; x.lineWidth = 8;
+      for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2; x.beginPath(); x.moveTo(cx + Math.cos(a) * 56, cy + Math.sin(a) * 56); x.lineTo(cx + Math.cos(a) * 68, cy + Math.sin(a) * 68); x.stroke(); }
+      x.fillStyle = "#bbb"; x.beginPath(); x.arc(cx, cy, 30, 0, 7); x.fill();
+      x.fillStyle = "#555"; x.beginPath(); x.arc(cx, cy, 10, 0, 7); x.fill();
+    } else if (b.icon === "drop") {
+      x.fillStyle = b.accent; x.beginPath(); x.moveTo(cx, cy - 75);
+      x.bezierCurveTo(cx + 20, cy - 35, cx + 55, cy - 5, cx + 55, cy + 25);
+      x.arc(cx, cy + 25, 55, 0, Math.PI); x.bezierCurveTo(cx - 55, cy - 5, cx - 20, cy - 35, cx, cy - 75); x.fill();
+      x.fillStyle = "rgba(255,255,255,.45)"; x.beginPath(); x.ellipse(cx - 22, cy + 18, 10, 22, -0.3, 0, 7); x.fill();
+    } else if (b.icon === "bolt") {
+      x.fillStyle = b.accent; x.beginPath();
+      x.moveTo(cx + 15, cy - 80); x.lineTo(cx - 45, cy + 10); x.lineTo(cx - 5, cy + 10);
+      x.lineTo(cx - 20, cy + 80); x.lineTo(cx + 45, cy - 15); x.lineTo(cx + 5, cy - 15); x.closePath(); x.fill();
+    } else if (b.icon === "spanner") {
+      x.translate(cx, cy); x.rotate(-0.75); x.fillStyle = b.accent;
+      x.fillRect(-12, -40, 24, 110);
+      x.beginPath(); x.arc(0, -50, 34, 0, 7); x.fill();
+      x.fillStyle = b.bg; x.fillRect(-12, -92, 24, 44);
+      x.beginPath(); x.arc(0, 78, 10, 0, 7); x.fill();
+    }
+    x.restore();
+    left = 200;
+  }
+  const mid = (left + W2 - 24) / 2, room = W2 - 24 - left;
+  x.textAlign = "center"; x.textBaseline = "middle";
+  let size = 74;
+  x.font = `900 ${size}px 'Arial Black', 'Trebuchet MS', sans-serif`;
+  while (x.measureText(b.text).width > room && size > 30) { size -= 2; x.font = `900 ${size}px 'Arial Black', 'Trebuchet MS', sans-serif`; }
+  const ty = b.tag ? 86 : 100;
+  x.fillStyle = "rgba(0,0,0,.35)"; x.fillText(b.text, mid + 3, ty + 3);
+  x.fillStyle = b.fg; x.fillText(b.text, mid, ty);
+  if (b.tag) {
+    let ts = 30; x.font = `bold ${ts}px 'Trebuchet MS', sans-serif`;
+    while (x.measureText(b.tag).width > room && ts > 14) { ts -= 1; x.font = `bold ${ts}px 'Trebuchet MS', sans-serif`; }
+    x.fillStyle = b.tagCol || b.fg; x.fillText(b.tag, mid, 150);
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
   return t;
 }
-// all sponsors are invented for the game
+// All sponsors are invented for the game (no real brands, logos or colour schemes).
 const SPONSORS = [
-  { text: "DUSTY DEVILS", bg: "#c22e22", fg: "#ffffff", band: "#ffc861" },
-  { text: "DUSTBOWL TYRES", bg: "#161616", fg: "#ffffff", band: "#e9e4d8", tread: true },
-  { text: "IRONGUM MOTOR OIL", bg: "#1f6a3a", fg: "#f2c230", band: "#f2c230" },
-  { text: "BULLDUST FUEL CO.", bg: "#f07a1a", fg: "#1a1a1a", band: "#1a1a1a" },
-  { text: "SPINDLE NITRO", bg: "#1f4fb8", fg: "#ffffff", band: "#7cc0ff" },
-  { text: "WOMBAT WINCHES", bg: "#efe2c4", fg: "#5a3a20", band: "#8b5a2b" },
-  { text: "THUNDER GULLY FM 98.7", bg: "#3aa0d8", fg: "#ffffff", band: "#1f4f7a" }
+  { text: "DUSTY DEVILS", tag: "DIRT TRACK RACING", bg: "#c22e22", fg: "#ffffff", band: "#ffc861", tagCol: "#ffc861" },
+  { text: "VOLTROO", tag: "ENERGY DRINK · HOP TO IT!", bg: "#3b1d6e", fg: "#c6ff3a", band: "#c6ff3a", icon: "bolt", accent: "#c6ff3a", tagCol: "#ffffff" },
+  { text: "DUSTBOWL TYRES", tag: "GRIP WHEN IT COUNTS", bg: "#161616", fg: "#ffffff", band: "#e9e4d8", icon: "tyre", accent: "#e9e4d8", tagCol: "#bdbdbd" },
+  { text: "BOLT BARN", tag: "AUTO PARTS · TOOLS · ACCESSORIES", bg: "#0f7c7a", fg: "#ffffff", band: "#0b4f4e", icon: "spanner", accent: "#ffffff", tagCol: "#d6fffd" },
+  { text: "IRONGUM", tag: "MOTOR OIL · RUNS HOT, RUNS LONG", bg: "#1f6a3a", fg: "#f2c230", band: "#f2c230", icon: "drop", accent: "#f2c230", tagCol: "#ffffff" },
+  { text: "CLAWTRAK", tag: "ALL-TERRAIN TYRES", bg: "#2b2b2b", fg: "#ff8a1f", band: "#ff8a1f", icon: "tyre", accent: "#ff8a1f", tagCol: "#ffffff" },
+  { text: "BULLDUST FUEL CO.", tag: "FILL 'ER UP", bg: "#f07a1a", fg: "#1a1a1a", band: "#1a1a1a", tagCol: "#1a1a1a" },
+  { text: "VOLTROO", tag: "ZERO SUGAR · FULL SEND", bg: "#c6ff3a", fg: "#3b1d6e", band: "#3b1d6e", icon: "bolt", accent: "#3b1d6e", tagCol: "#3b1d6e" },
+  { text: "SPINDLE NITRO", tag: "BOTTLED FAST", bg: "#1f4fb8", fg: "#ffffff", band: "#7cc0ff", tagCol: "#7cc0ff" },
+  { text: "BOLT BARN", tag: "WE'VE GOT THE BITS", bg: "#ffffff", fg: "#0f7c7a", band: "#0f7c7a", icon: "spanner", accent: "#0f7c7a", tagCol: "#333333" },
+  { text: "THUNDER GULLY FM", tag: "98.7 · LOUD AND PROUD", bg: "#3aa0d8", fg: "#ffffff", band: "#1f4f7a", tagCol: "#1f4f7a" },
+  { text: "WOMBAT WINCHES", tag: "PULLS ANYTHING", bg: "#efe2c4", fg: "#5a3a20", band: "#8b5a2b", tagCol: "#8b5a2b" }
 ];
 function buildFence() {
   const p = track.pts, n = p.length;
@@ -538,9 +583,9 @@ function buildFence() {
     used.push([mx, my]);
     const len = Math.hypot(b.x - a.x, b.y - a.y) - 0.4;
     const mat = bannerMats[si++ % bannerMats.length];
-    const ban = new THREE.Mesh(new THREE.BoxGeometry(len, 3.0, 0.1), [edge, edge, edge, edge, mat, mat]);
+    const ban = new THREE.Mesh(new THREE.BoxGeometry(len, 6.0, 0.12), [edge, edge, edge, edge, mat, mat]);   // 3:1, twice the old height
     // free-standing board on two legs, just behind the tyres and raised to show above them
-    const bx = mx - a.ix * 0.3, bz = my - a.iy * 0.3, by = 5.4;
+    const bx = mx - a.ix * 0.6, bz = my - a.iy * 0.6, by = 7.6;
     ban.position.set(bx, by, bz);
     for (const s of [-0.42, 0.42]) {
       const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, by, 6), new THREE.MeshLambertMaterial({ color: "#6f757b" }));
