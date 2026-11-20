@@ -1975,25 +1975,23 @@ function hudGroup(c, ax, ay, draw) {   // draw a group of cards scaled about an 
   draw();
   c.restore();
 }
-// The cash / nitro card sits on open grass on the left of the screen. Each time
-// the camera is set up we look at which screen spots land on grass well away
-// from the track, grandstand and pits, and take the leftmost place it fits.
+// The cash / nitro card sits just under the lap card (in a race, under the
+// leaderboard), lined up with its left edge, as long as it doesn't cover the
+// track. After each camera fit we cast screen points onto the ground to see
+// which are clear of the track, and slide the card down only if it must.
 const CASH_W = 26, CASH_H = 44;
-let cashSpot = { x: 4, y: H - CASH_H - 4 };
+const cashSpots = { practice: { x: 4, y: 24 }, race: { x: 4, y: 42 } };
 function computeCashSpot() {
   const step = 2, cols = Math.floor(170 / step), rows = Math.floor(H / step);
   const ok = new Uint8Array(cols * rows);
   const v = new THREE.Vector3(), dir = new THREE.Vector3();
   for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
-    const lx = i * step, ly = j * step;
-    v.set(lx / W * 2 - 1, 1 - ly / H * 2, 0.5).unproject(camera);
+    v.set(i * step / W * 2 - 1, 1 - j * step / H * 2, 0.5).unproject(camera);
     dir.copy(v).sub(camera.position).normalize();
-    if (dir.y >= -1e-4) continue;
+    if (dir.y >= -1e-4) { ok[j * cols + i] = 1; continue; }        // sky: fine
     const k = -camera.position.y / dir.y;
     const gx = camera.position.x + dir.x * k, gz = camera.position.z + dir.z * k;
-    if (gz < 6) continue;                                        // keep off the grandstand, pits and car park
-    if (nearest(gx, gz).d < HW + 6) continue;                    // keep off the track and tyre walls
-    ok[j * cols + i] = 1;
+    if (nearest(gx, gz).d > HW + 6) ok[j * cols + i] = 1;            // clear of the track and tyre walls
   }
   const fits = (x0, y0) => {
     for (let y = y0; y <= y0 + CASH_H; y += step) for (let x = x0; x <= x0 + CASH_W; x += step) {
@@ -2002,12 +2000,14 @@ function computeCashSpot() {
     }
     return true;
   };
-  for (let x = 4; x + CASH_W < 168; x += step) {
-    let best = null;
-    for (let y = 30; y + CASH_H <= H - 3; y += step) if (fits(x, y) && (!best || Math.abs(y + CASH_H / 2 - H * 0.55) < Math.abs(best + CASH_H / 2 - H * 0.55))) best = y;
-    if (best != null) { cashSpot = { x, y: best }; return; }
-  }
-  cashSpot = { x: 4, y: H - CASH_H - 4 };                        // fallback: bottom left
+  const place = yMin => {
+    for (let y = yMin; y + CASH_H <= H - 3; y += 1) if (fits(4, Math.round(y))) return { x: 4, y };
+    for (let x = 6; x + CASH_W < 168; x += step) for (let y = yMin; y + CASH_H <= H - 3; y += step) if (fits(x, y)) return { x, y };
+    return { x: 4, y: H - CASH_H - 4 };
+  };
+  const gap = 2;
+  cashSpots.practice = place(3 + 23 * HUD_SCALE + gap);                 // under the lap card
+  cashSpots.race = place(3 + (28.5 + 3 * 6.2 + 3 - 3) * HUD_SCALE + gap); // under the leaderboard
 }
 function drawHUDModern() {
   const c = hctx, t = truck;
@@ -2085,9 +2085,10 @@ function drawHUDModern() {
   hudText(c, String(gearState.gear || 1), 306, 13.2, 9, 800, F_NUM, "#ffffff", "center");
   hudLabel(c, "GEAR", 306, 22.8, "center");
   });
-  // cash + nitro: narrow vertical card on open grass at the left (see computeCashSpot)
+  // cash + nitro: narrow vertical card under the lap card (see computeCashSpot)
   {
-    const X = cashSpot.x, Y = cashSpot.y;
+    const spot = race.active ? cashSpots.race : cashSpots.practice;
+    const X = spot.x, Y = spot.y;
     hudPanel(c, X, Y, CASH_W, CASH_H);
     hudLabel(c, "CASH", X + 3.2, Y + 4.6);
     const cash = "$" + t.cash.toLocaleString("en-AU");
@@ -2534,7 +2535,7 @@ setMode();
 resetTruck();
 buildTuning();
 buildCam();
-window.DD = { cashSpot: () => cashSpot, CP, race, racers, startRace, gear: () => gearState, fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
+window.DD = { cashSpot: () => cashSpots, CP, race, racers, startRace, gear: () => gearState, fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
 let last = performance.now(), accT = 0;
 function frame(now) {
   const real = Math.min(0.05, (now - last) / 1000);
