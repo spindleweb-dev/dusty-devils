@@ -12,6 +12,8 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
 | ← → / A D | Steer |
 | Space | Nitro burst |
 | Enter | Start a race against the rival teams |
+| 1 / 2 / 3 | Change track |
+| Esc | Back to the title screen |
 | P | Back to practice |
 | R | Reset truck |
 | G | Classic (1×, 16-direction sprites) / Enhanced (4×) graphics |
@@ -31,7 +33,7 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
    - ✅ Crowds: campers in chairs with hats, beers, eskies and umbrellas; flag-waving fans; corner marshals with yellow flags. They watch and cheer the truck.
 2. ✅ Races: 4 laps, start lights, positions, leaderboard, results and prize money
 3. ✅ Computer drivers: the Voltroo and Irongum pit teams race you
-4. Hills, jumps, mud and water
+4. ✅ Jumps and water traps, on two new tracks (Creek Crossing, Ridge Run) alongside Red Dirt Raceway; title screen with track picker
 5. Nitro and pickups
 6. Shop and upgrades, more tracks, reverse tracks
 7. Polish: CRT mode, particles, sound, 2 players
