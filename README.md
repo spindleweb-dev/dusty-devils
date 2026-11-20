@@ -21,7 +21,7 @@ A from-scratch JavaScript + HTML Canvas homage to late-80s single-screen off-roa
 1. ✅ One track and one truck with drift handling and a live tuning panel
    - ✅ 3D perspective view (three.js) from a fixed tilted camera, with camera sliders in the tuning panel
    - ✅ Nitro (Space) plus nitro-bottle and cash pickups
-   - ✅ Tall street-circuit catch fence (about twice truck height, top angled in over the track) with sponsor banners along the bottom (made-up sponsors)
+   - ✅ Tyre walls stacked 4 high, with sponsor banners on legs behind them (made-up sponsors). A catch fence was tried and switched off (`SHOW_FENCE`)
    - ✅ Crowds: campers in chairs with hats, beers, eskies and umbrellas; flag-waving fans; corner marshals with yellow flags. They watch and cheer the truck.
 2. Laps, checkpoints, finish order
 3. Computer drivers

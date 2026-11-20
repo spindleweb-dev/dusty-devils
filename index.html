@@ -329,13 +329,14 @@ for (const side of [-1, 1]) {
 const tyreGeo = new THREE.TorusGeometry(1.45, 0.7, 6, 12);
 tyreGeo.rotateX(Math.PI / 2);
 const tyreMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
-const tyres = new THREE.InstancedMesh(tyreGeo, tyreMat, tyreSpots.length * 2);
+const TYRE_LEVELS = 4;                       // tyres per stack (about truck height)
+const tyres = new THREE.InstancedMesh(tyreGeo, tyreMat, tyreSpots.length * TYRE_LEVELS);
 {
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), col = new THREE.Color();
   const R = rng(3);
   let k = 0;
   tyreSpots.forEach(([x, y], i) => {
-    for (let lvl = 0; lvl < 2; lvl++) {
+    for (let lvl = 0; lvl < TYRE_LEVELS; lvl++) {
       e.set((R() - 0.5) * 0.12, R() * 6, (R() - 0.5) * 0.12);
       q.setFromEuler(e);
       m.compose(new THREE.Vector3(x + (R() - .5) * .4, 0.7 + lvl * 1.35, y + (R() - .5) * .4), q, new THREE.Vector3(1, 1, 1));
@@ -404,7 +405,7 @@ function box(w, h, d, color, x, y, z, parent = scenery) {
   // advertising boards along the front of the stand
   for (let x = x0; x < x1; x += 20) box(19, 2.4, 0.5, ["#f2c230", "#ffffff", "#d8342c"][(x / 20) % 3 | 0], x + 10, 1.2, front + 2);
 }
-// ---------- Catch fence behind the tyres, with sponsor banners ----------
+// ---------- Catch fence (switched off) and sponsor banners ----------
 // A tall street-circuit style catch fence: straight up for FENCE_H, then the
 // top section angles in over the track by FENCE_LEAN. It runs along both
 // sides wherever it doesn't cut into another part of the track. Banners for
@@ -414,6 +415,7 @@ const FENCE_H = 10;              // vertical part (~1.5× truck height)
 const FENCE_TOP = 14.5;          // total height (~2× truck height)
 const FENCE_LEAN = 3.8;          // how far the top leans in towards the track
 const POST_EVERY = 4;            // posts every 4 track samples (6 units)
+const SHOW_FENCE = false;        // the user preferred taller tyre walls; the fence lines are still used to place banners
 const fence = { runs: [] };
 function chainLinkTexture() {
   const c = document.createElement("canvas"); c.width = c.height = 64;
@@ -489,12 +491,14 @@ function buildFence() {
         idx.push(o, o + 1, m, o + 1, m + 1, m, o + 1, o + 2, m + 1, o + 2, m + 2, m + 1);
       }
     });
+    if (SHOW_FENCE) {
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
     g.setIndex(idx); g.computeVertexNormals();
     const m = new THREE.Mesh(g, meshMat); m.receiveShadow = true;
     scenery.add(m);
+    }
     pts.forEach((q, i) => {
       posts.push(q);
       arms.push(q);
@@ -517,10 +521,10 @@ function buildFence() {
   const postMesh = new THREE.InstancedMesh(cyl, steel, posts.length + arms.length);
   posts.forEach((q, i) => beam(postMesh, i, at(q, 0, 0), at(q, FENCE_H + 0.1, 0), 0.24));
   arms.forEach((q, i) => beam(postMesh, posts.length + i, at(q, FENCE_H, 0), at(q, FENCE_TOP + 0.1, 1), 0.2));
-  postMesh.castShadow = true; scenery.add(postMesh);
+  postMesh.castShadow = true; if (SHOW_FENCE) scenery.add(postMesh);
   const railMesh = new THREE.InstancedMesh(cyl, steel, rails.length);
   rails.forEach(([A, B], i) => beam(railMesh, i, A, B, 0.11));
-  railMesh.castShadow = true; scenery.add(railMesh);
+  railMesh.castShadow = true; if (SHOW_FENCE) scenery.add(railMesh);
   // sponsor banners standing along the bottom of the fence
   const R = rng(5);
   const used = [];
@@ -535,7 +539,14 @@ function buildFence() {
     const len = Math.hypot(b.x - a.x, b.y - a.y) - 0.4;
     const mat = bannerMats[si++ % bannerMats.length];
     const ban = new THREE.Mesh(new THREE.BoxGeometry(len, 3.0, 0.1), [edge, edge, edge, edge, mat, mat]);
-    ban.position.set(mx + a.ix * 1.3, 2.2, my + a.iy * 1.3);
+    // free-standing board on two legs, just behind the tyres and raised to show above them
+    const bx = mx - a.ix * 0.3, bz = my - a.iy * 0.3, by = 5.4;
+    ban.position.set(bx, by, bz);
+    for (const s of [-0.42, 0.42]) {
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, by, 6), new THREE.MeshLambertMaterial({ color: "#6f757b" }));
+      leg.position.set(bx + (b.x - a.x) * s, by / 2, bz + (b.y - a.y) * s);
+      leg.castShadow = true; scenery.add(leg);
+    }
     // lean the board back (like trackside A-frame boards) so its face tilts up towards
     // the camera, which sits to the south (+z) looking down: the top always leans north.
     const yaw = -Math.atan2(b.y - a.y, b.x - a.x);
