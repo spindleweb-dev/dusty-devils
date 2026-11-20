@@ -186,12 +186,14 @@ const TRACKS = [
   [40, 72], [75, 34], [170, 32], [268, 35], [295, 72], [245, 94], [182, 92],
   [163, 115], [195, 133], [283, 145], [273, 177], [150, 178], [58, 175], [27, 134]
 ], jumps: [], water: [] },
-  { name: "CREEK CROSSING", short: "CREEK", pts: [[45, 80], [72, 36], [160, 32], [262, 36], [293, 72], [288, 122], [252, 152], [204, 142], [162, 106], [122, 132], [112, 172], [62, 176], [30, 138]],
-    jumps: [{ x: 292, y: 96, len: 15, h: 4 }, { x: 88, y: 175, len: 14, h: 3.6 }],
-    water: [{ x: 165, y: 110, lat: 0, rx: 15, rz: 11 }, { x: 33, y: 112, lat: 3, rx: 13, rz: 8 }, { x: 228, y: 148, lat: -4, rx: 11, rz: 7 }] },
-  { name: "RIDGE RUN", short: "RIDGE", pts: [[40, 92], [70, 36], [160, 31], [265, 35], [297, 62], [266, 89], [218, 84], [176, 108], [226, 137], [290, 135], [287, 175], [204, 176], [146, 150], [100, 176], [44, 168]],
-    jumps: [{ x: 250, y: 176, len: 15, h: 4.2 }, { x: 41, y: 130, len: 14, h: 3.8 }, { x: 255, y: 136, len: 12, h: 3.2 }],
-    water: [{ x: 196, y: 98, lat: 0, rx: 12, rz: 10 }, { x: 122, y: 163, lat: 0, rx: 12, rz: 9 }] }
+  // Creek Crossing: an oval with a dog-leg on the right. A long bottom straight with a big jump, landing into the creek.
+  { name: "CREEK CROSSING", short: "CREEK", pts: [[40, 90], [70, 36], [160, 32], [262, 36], [296, 68], [280, 104], [298, 140], [270, 176], [160, 178], [64, 176], [32, 140]],
+    jumps: [{ x: 212, y: 177, len: 22, h: 6.2 }, { x: 34, y: 130, len: 16, h: 4.6 }],
+    water: [{ x: 128, y: 177, lat: 0, rx: 13, rz: 15 }, { x: 285, y: 106, lat: 0, rx: 11, rz: 9 }, { x: 40, y: 96, lat: 2, rx: 12, rz: 8 }] },
+  // Ridge Run: switchbacks, three long straights stacked across the infield, each with a jump.
+  { name: "RIDGE RUN", short: "RIDGE", pts: [[60, 40], [160, 31], [255, 34], [292, 58], [296, 120], [282, 170], [240, 178], [140, 178], [70, 174], [42, 150], [62, 126], [120, 124], [200, 126], [238, 110], [222, 86], [170, 82], [100, 84], [52, 80], [36, 60]],
+    jumps: [{ x: 198, y: 178, len: 22, h: 6.2 }, { x: 92, y: 124, len: 20, h: 5.4 }, { x: 192, y: 82, len: 18, h: 5 }],
+    water: [{ x: 112, y: 177, lat: 0, rx: 13, rz: 15 }, { x: 88, y: 84, lat: 0, rx: 12, rz: 12 }, { x: 296, y: 100, lat: 0, rx: 11, rz: 8 }] }
 ];
 const TRACK_ID = Math.max(0, Math.min(TRACKS.length - 1, recall("dd_track") | 0));
 const TR = TRACKS[TRACK_ID];
@@ -265,9 +267,8 @@ function nearest(x, y) {
 }
 
 // ---------- Jumps and water traps ----------
-// A jump is a dirt kicker across the whole track: it rises over most of its
-// length, has a short flat lip, then drops away, so a truck going fast enough
-// flies off the end. Water traps are shallow elliptical pools that slow you
+// A jump is a dirt kicker across the whole track: it curves up, steepest
+// at the lip, then drops away, so a truck going fast flies off the end. Water traps are shallow elliptical pools that slow you
 // down and make the truck slippery.
 const JUMPS = (TR.jumps || []).map(j => ({ s0: nearest(j.x, j.y).s - j.len / 2, len: j.len, h: j.h }));
 function groundHeight(s) {
@@ -275,7 +276,7 @@ function groundHeight(s) {
   for (const j of JUMPS) {
     let d = s - j.s0;
     if (d < -L / 2) d += L; else if (d > L / 2) d -= L;
-    if (d >= 0 && d <= j.len) { const f = d / j.len; return j.h * Math.min(1, f / 0.82); }
+    if (d >= 0 && d <= j.len) return j.h * Math.pow(d / j.len, 1.4);   // kicker: curves up, steepest at the lip
   }
   return 0;
 }
@@ -1989,6 +1990,7 @@ function updateTruck(t, dt) {
   const ground = !t.air;                       // no grip, steering or drive while airborne
   const wet = ground ? inWater(t.x, t.y) : null;
   if (wet && !t.wet && Math.hypot(t.vx, t.vy) > 20) { if (!t.ai) sfxSplash(Math.min(1, Math.hypot(t.vx, t.vy) / 110)); splash(t.x, t.y, 14, t); }
+  if (!wet && t.wet && ground && Math.hypot(t.vx, t.vy) > 30) { if (!t.ai) sfxSplash(Math.min(0.6, Math.hypot(t.vx, t.vy) / 180)); splash(t.x, t.y, 8, t); }
   t.wet = !!wet;
 
   let fx = Math.cos(t.a), fy = Math.sin(t.a);
@@ -2051,6 +2053,7 @@ function updateTruck(t, dt) {
     if (t.z <= gh) {
       const impact = -t.vz;
       t.z = gh; t.vz = 0; t.air = false;
+      if (impact > 10 && inWater(t.x, t.y)) { splash(t.x, t.y, 26, t); if (!t.ai) sfxSplash(1); }
       if (impact > 10) {
         sfxThud(Math.min(1, impact / 55) * (t.ai ? 0.4 : 1));
         dust(t.x, t.y, 8 + impact / 4, 1.7);
@@ -2060,7 +2063,7 @@ function updateTruck(t, dt) {
     }
   } else {
     const prev = t.z || 0;
-    if (gh < prev - 0.25) { t.air = true; t.vz = Math.max(0, t.climbV || 0); t.z = prev; }   // off the lip
+    if (gh < prev - 0.25) { t.air = true; t.vz = Math.max(0, t.climbV || 0); t.z = prev; t.launchV = t.vz; }   // off the lip
     else { t.climbV = (gh - prev) / dt; t.z = gh; }
   }
   if (wet && Math.hypot(t.vx, t.vy) > 15 && Math.random() < dt * 25) splash(t.x - Math.cos(t.a) * 4, t.y - Math.sin(t.a) * 4, 2, t);
@@ -2809,6 +2812,13 @@ function initAudio() {
   const d = A.noise.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   const ns = AC.createBufferSource(); ns.buffer = A.noise; ns.loop = true;
+  // water churn: looping noise through a wandering band-pass, louder with speed in water
+  const wn = AC.createBufferSource(); wn.buffer = A.noise; wn.loop = true; wn.playbackRate.value = 0.7;
+  A.wBp = AC.createBiquadFilter(); A.wBp.type = "bandpass"; A.wBp.frequency.value = 800; A.wBp.Q.value = 0.9;
+  A.wLp = AC.createBiquadFilter(); A.wLp.type = "lowpass"; A.wLp.frequency.value = 2200;
+  A.wG = AC.createGain(); A.wG.gain.value = 0;
+  wn.connect(A.wBp); A.wBp.connect(A.wLp); A.wLp.connect(A.wG); A.wG.connect(A.master); wn.start();
+  A.slosh = 0;
   A.bp = AC.createBiquadFilter(); A.bp.type = "bandpass"; A.bp.frequency.value = 1100; A.bp.Q.value = 0.7;
   A.sg = AC.createGain(); A.sg.gain.value = 0;
   ns.connect(A.bp); A.bp.connect(A.sg); A.sg.connect(A.master); ns.start();
@@ -2843,7 +2853,18 @@ function updateAudio(t) {
   if (A.prevThr && !A.load && A.rpm > 3000) A.popUntil = now + (gs.shifted ? 0.2 : 0.8);   // crackles on lift and on upshifts
   A.prevThr = A.load;
   if (now < A.popUntil && Math.random() < 0.14) sfxPop();
-  A.sg.gain.setTargetAtTime(Math.max(0, Math.min(1, (t.slide - 20) / 70)) * 0.22, now, 0.05);
+  A.sg.gain.setTargetAtTime(t.wet ? 0 : Math.max(0, Math.min(1, (t.slide - 20) / 70)) * 0.22, now, 0.05);
+  // water: you at full volume, rivals fading with distance
+  let wet = 0;
+  for (const r of racers) {
+    if (!isRacing(r) || !r.wet || r.air) continue;
+    const sp = Math.min(1, Math.hypot(r.vx, r.vy) / 110);
+    wet = Math.max(wet, r === t ? sp : sp * 0.5 * Math.max(0, 1 - Math.hypot(r.x - t.x, r.y - t.y) / 90));
+  }
+  A.wG.gain.setTargetAtTime(wet * 0.55, now, 0.06);
+  A.wBp.frequency.setTargetAtTime(600 + Math.random() * 900 + wet * 500, now, 0.04);
+  A.slosh -= dt;
+  if (wet > 0.12 && A.slosh <= 0) { sfxSlosh(wet); A.slosh = 0.09 + Math.random() * 0.16 / (0.4 + wet); }
 }
 
 function sfxBeep(freq, len) {
@@ -2864,6 +2885,18 @@ function sfxSplash(strength) {
   g.gain.setValueAtTime(0.001, now); g.gain.exponentialRampToValueAtTime(0.25 + strength * 0.35, now + 0.03); g.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
   src.connect(bp); bp.connect(g); g.connect(A.master);
   src.start(now, Math.random() * 0.4, 0.55);
+}
+function sfxSlosh(level) {
+  // a short wet slap: noise through a falling band-pass
+  const now = AC.currentTime;
+  const src = AC.createBufferSource(); src.buffer = A.noise;
+  const bp = AC.createBiquadFilter(); bp.type = "bandpass"; bp.Q.value = 1.6;
+  const f0 = 900 + Math.random() * 1400;
+  bp.frequency.setValueAtTime(f0, now); bp.frequency.exponentialRampToValueAtTime(f0 * 0.45, now + 0.12);
+  const g = AC.createGain(), v = 0.06 + level * (0.12 + Math.random() * 0.12);
+  g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(v, now + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+  src.connect(bp); bp.connect(g); g.connect(A.master);
+  src.start(now, Math.random() * 0.8, 0.18);
 }
 function sfxPop() {
   const now = AC.currentTime;
