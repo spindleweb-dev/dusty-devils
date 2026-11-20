@@ -1368,6 +1368,7 @@ function resize() {
   hctx.setTransform(hs, 0, 0, hs, 0, 0);
   hctx.imageSmoothingEnabled = !classic;
   fitCamera();
+  computeCashSpot();
   dustMat.uniforms.uScale.value = h / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
   flameMat.uniforms.uScale.value = dustMat.uniforms.uScale.value;
 }
@@ -1968,11 +1969,52 @@ function hudText(c, txt, x, y, size, weight, family, color, align = "left") {
   c.fillText(txt, x, y);
 }
 const hudLabel = (c, txt, x, y, align = "left", col = "rgba(150,220,240,0.78)") => hudText(c, txt, x, y, 3.5, 600, F_LBL, col, align);
+const HUD_SCALE = 0.78;                 // top dashboard cards drawn at 78% size
+function hudGroup(c, ax, ay, draw) {   // draw a group of cards scaled about an anchor point
+  c.save(); c.translate(ax, ay); c.scale(HUD_SCALE, HUD_SCALE); c.translate(-ax, -ay);
+  draw();
+  c.restore();
+}
+// The cash / nitro card sits on open grass on the left of the screen. Each time
+// the camera is set up we look at which screen spots land on grass well away
+// from the track, grandstand and pits, and take the leftmost place it fits.
+const CASH_W = 26, CASH_H = 44;
+let cashSpot = { x: 4, y: H - CASH_H - 4 };
+function computeCashSpot() {
+  const step = 2, cols = Math.floor(170 / step), rows = Math.floor(H / step);
+  const ok = new Uint8Array(cols * rows);
+  const v = new THREE.Vector3(), dir = new THREE.Vector3();
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const lx = i * step, ly = j * step;
+    v.set(lx / W * 2 - 1, 1 - ly / H * 2, 0.5).unproject(camera);
+    dir.copy(v).sub(camera.position).normalize();
+    if (dir.y >= -1e-4) continue;
+    const k = -camera.position.y / dir.y;
+    const gx = camera.position.x + dir.x * k, gz = camera.position.z + dir.z * k;
+    if (gz < 6) continue;                                        // keep off the grandstand, pits and car park
+    if (nearest(gx, gz).d < HW + 6) continue;                    // keep off the track and tyre walls
+    ok[j * cols + i] = 1;
+  }
+  const fits = (x0, y0) => {
+    for (let y = y0; y <= y0 + CASH_H; y += step) for (let x = x0; x <= x0 + CASH_W; x += step) {
+      const i = Math.round(x / step), j = Math.round(y / step);
+      if (i >= cols || j >= rows || !ok[j * cols + i]) return false;
+    }
+    return true;
+  };
+  for (let x = 4; x + CASH_W < 168; x += step) {
+    let best = null;
+    for (let y = 30; y + CASH_H <= H - 3; y += step) if (fits(x, y) && (!best || Math.abs(y + CASH_H / 2 - H * 0.55) < Math.abs(best + CASH_H / 2 - H * 0.55))) best = y;
+    if (best != null) { cashSpot = { x, y: best }; return; }
+  }
+  cashSpot = { x: 4, y: H - CASH_H - 4 };                        // fallback: bottom left
+}
 function drawHUDModern() {
   const c = hctx, t = truck;
   c.clearRect(0, 0, W, H);
   c.save();
   const lap = t.laps + (t.timing ? 1 : 0);
+  hudGroup(c, 4, 3, () => {
   hudPanel(c, 4, 3, 58, 23);
   if (!race.active) {
     // left: lap + session
@@ -2004,8 +2046,10 @@ function drawHUDModern() {
       hudText(c, gapTxt, 59, y, 3.5, 700, F_NUM, r.finished ? "#3ff0a0" : "rgba(216,246,255,0.75)", "right");
     });
   }
+  });
   // centre: lap time, last, best, delta
   const flash = t.newBest && Math.floor(raceTime * 6) % 2;
+  hudGroup(c, 160, 3, () => {
   hudPanel(c, 108, 3, 104, 23, flash ? "rgba(255,210,90,0.9)" : undefined, flash ? "#ffd25a" : HUD_CYAN);
   const done = race.active && t.finished;
   hudLabel(c, done ? "RACE TIME" : t.newBest ? "NEW BEST LAP" : "LAP TIME", 160, 7.6, "center", t.newBest && !done ? "#ffd25a" : undefined);
@@ -2021,9 +2065,11 @@ function drawHUDModern() {
     const col = d <= 0.0001 ? "#3ff0a0" : "#ff6b6b";
     hudText(c, (d <= 0.0001 ? "−" : "+") + Math.abs(d).toFixed(2), 160, 22.8, 3.8, 700, F_NUM, col, "center");
   }
+  });
   // right: rev bar, speed, gear
   const rpmF = Math.max(0, Math.min(1, (gearState.rpm - 450) / (5400 - 450)));
   const shift = gearState.rpm > 4800 && Math.floor(raceTime * 10) % 2;
+  hudGroup(c, 316, 3, () => {
   hudPanel(c, 252, 3, 64, 23, shift ? "rgba(255,90,90,0.9)" : undefined, shift ? "#ff5a5a" : HUD_CYAN);
   const SEG = 14, lit = Math.round(rpmF * SEG);
   for (let k = 0; k < SEG; k++) {
@@ -2038,23 +2084,30 @@ function drawHUDModern() {
   c.strokeStyle = "rgba(95,225,255,0.6)"; c.lineWidth = 0.4; c.stroke();
   hudText(c, String(gearState.gear || 1), 306, 13.2, 9, 800, F_NUM, "#ffffff", "center");
   hudLabel(c, "GEAR", 306, 22.8, "center");
-  // bottom left: cash + nitro cells (+ boost bar)
-  hudPanel(c, 4, H - 19, 98, 16);
-  hudLabel(c, "CASH", 8.5, H - 14.5);
-  hudText(c, "$" + t.cash.toLocaleString("en-AU"), 8, H - 8.2, 6.4, 800, F_NUM, "#ffd25a");
-  hudLabel(c, "NITRO", 47, H - 14.5);
-  for (let k = 0; k < 9; k++) {
-    const x = 47 + k * 5.5, y = H - 11.8;
-    hudRound(c, x, y, 4.3, 5.6, 0.8);
-    if (k < t.nitros) {
-      c.fillStyle = "rgba(74,168,255,0.35)"; c.fill();
-      hudRound(c, x + 0.6, y + 0.6, 3.1, 4.4, 0.5); c.fillStyle = "#4aa8ff"; c.fill();
-    } else { c.strokeStyle = "rgba(255,255,255,0.18)"; c.lineWidth = 0.3; c.stroke(); }
-  }
-  if (t.boost > 0) {
-    c.fillStyle = "rgba(124,192,255,0.25)"; c.fillRect(47, H - 5.2, 49, 1.2);
-    c.fillStyle = "#7cc0ff"; c.fillRect(47, H - 5.2, 49 * t.boost / P.nitroTime, 1.2);
-    hudText(c, "BOOST", 96, H - 14.5, 3.5, 700, F_LBL, "#7cc0ff", "right");
+  });
+  // cash + nitro: narrow vertical card on open grass at the left (see computeCashSpot)
+  {
+    const X = cashSpot.x, Y = cashSpot.y;
+    hudPanel(c, X, Y, CASH_W, CASH_H);
+    hudLabel(c, "CASH", X + 3.2, Y + 4.6);
+    const cash = "$" + t.cash.toLocaleString("en-AU");
+    let fs = 5.4;
+    c.font = `800 ${fs}px ${F_NUM}`;
+    while (c.measureText(cash).width > CASH_W - 5 && fs > 2.6) { fs -= 0.2; c.font = `800 ${fs}px ${F_NUM}`; }
+    hudText(c, cash, X + 3, Y + 10.6, fs, 800, F_NUM, "#ffd25a");
+    c.fillStyle = "rgba(95,225,255,0.18)"; c.fillRect(X + 2.5, Y + 14.6, CASH_W - 5, 0.3);
+    hudLabel(c, "NITRO", X + 3.2, Y + 18.6);
+    hudText(c, "×" + t.nitros, X + CASH_W - 3, Y + 18.6, 3.5, 700, F_NUM, "#7cc0ff", "right");
+    for (let k = 0; k < 9; k++) {
+      const cx = X + 3.2 + (k % 3) * 6.8, cy = Y + 21.8 + Math.floor(k / 3) * 5.4;
+      hudRound(c, cx, cy, 5.8, 4.4, 0.7);
+      if (k < t.nitros) {
+        c.fillStyle = "rgba(74,168,255,0.35)"; c.fill();
+        hudRound(c, cx + 0.6, cy + 0.6, 4.6, 3.2, 0.5); c.fillStyle = "#4aa8ff"; c.fill();
+      } else { c.strokeStyle = "rgba(255,255,255,0.18)"; c.lineWidth = 0.3; c.stroke(); }
+    }
+    c.fillStyle = "rgba(124,192,255,0.18)"; c.fillRect(X + 3.2, Y + 39.4, CASH_W - 6.4, 1.2);
+    if (t.boost > 0) { c.fillStyle = "#7cc0ff"; c.fillRect(X + 3.2, Y + 39.4, (CASH_W - 6.4) * t.boost / P.nitroTime, 1.2); }
   }
   const pulse = 0.45 + 0.35 * Math.sin(raceTime * 4);
   if (!race.active && !t.timing) {
@@ -2481,7 +2534,7 @@ setMode();
 resetTruck();
 buildTuning();
 buildCam();
-window.DD = { CP, race, racers, startRace, gear: () => gearState, fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
+window.DD = { cashSpot: () => cashSpot, CP, race, racers, startRace, gear: () => gearState, fence, crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
 let last = performance.now(), accT = 0;
 function frame(now) {
   const real = Math.min(0.05, (now - last) / 1000);
