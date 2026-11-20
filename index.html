@@ -404,6 +404,273 @@ function box(w, h, d, color, x, y, z, parent = scenery) {
   // advertising boards along the front of the stand
   for (let x = x0; x < x1; x += 20) box(19, 2.4, 0.5, ["#f2c230", "#ffffff", "#d8342c"][(x / 20) % 3 | 0], x + 10, 1.2, front + 2);
 }
+// ---------- Crowd: campers, fans with flags, track marshals ----------
+// People are built from simple boxes and spheres. Each body part is one
+// InstancedMesh shared by everyone, so ~80 animated people cost only a
+// handful of draw calls. Poses are rebuilt every frame from a few numbers
+// (excitement, drinking, head turn).
+const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _v = new THREE.Vector3(), _one = new THREE.Vector3(1, 1, 1), _c = new THREE.Color();
+const _root = new THREE.Matrix4(), _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _arm = new THREE.Matrix4(), _head = new THREE.Matrix4();
+const _id = new THREE.Matrix4();
+const CS = 1.3;                                    // people a bit larger than life so they read from the camera
+const _cs = new THREE.Vector3(CS, CS, CS);
+function local(out, parent, x, y, z, rx = 0, ry = 0, rz = 0) {
+  _e.set(rx, ry, rz); _q.setFromEuler(_e); _v.set(x, y, z);
+  return out.compose(_v, _q, _one).premultiply(parent);
+}
+class Instancer {
+  constructor(geo, max = 400) {
+    this.mesh = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ color: 0xffffff }), max);
+    this.mesh.count = 0;
+    this.mesh.castShadow = this.mesh.receiveShadow = true;
+    this.mesh.frustumCulled = false;
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    scene.add(this.mesh);
+  }
+  add(m, color) { const i = this.mesh.count++; this.mesh.setMatrixAt(i, m); this.mesh.setColorAt(i, _c.set(color)); return i; }
+  set(i, m) { this.mesh.setMatrixAt(i, m); }
+  dirty() { this.mesh.instanceMatrix.needsUpdate = true; if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true; }
+}
+const CG = {
+  torso: new THREE.BoxGeometry(1.1, 1.45, 0.65), stripe: new THREE.BoxGeometry(1.16, 0.16, 0.71),
+  head: new THREE.SphereGeometry(0.42, 8, 6),
+  thigh: new THREE.BoxGeometry(0.44, 0.95, 0.46).translate(0, -0.475, 0),
+  shin: new THREE.BoxGeometry(0.4, 1.15, 0.42).translate(0, -0.575, 0),
+  arm: new THREE.BoxGeometry(0.3, 1.3, 0.3).translate(0, -0.6, 0),
+  can: new THREE.CylinderGeometry(0.14, 0.14, 0.38, 8),
+  capCrown: new THREE.SphereGeometry(0.46, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2), capBrim: new THREE.BoxGeometry(0.55, 0.06, 0.5),
+  hatCrown: new THREE.CylinderGeometry(0.34, 0.4, 0.4, 8), hatBrim: new THREE.CylinderGeometry(0.9, 0.9, 0.05, 12),
+  seat: new THREE.BoxGeometry(1.45, 0.12, 1.25), back: new THREE.BoxGeometry(1.45, 1.35, 0.1),
+  cleg: new THREE.BoxGeometry(0.09, 1.15, 0.09), carm: new THREE.BoxGeometry(0.12, 0.1, 1.2),
+  pole: new THREE.CylinderGeometry(0.07, 0.07, 4.9, 6), canopy: new THREE.ConeGeometry(2.8, 1.0, 10),
+  eskyBody: new THREE.BoxGeometry(1.7, 1.0, 1.1), eskyLid: new THREE.BoxGeometry(1.8, 0.24, 1.2),
+  signPole: new THREE.CylinderGeometry(0.08, 0.08, 3.4, 6), sign: new THREE.BoxGeometry(1.7, 1.1, 0.12)
+};
+const I = {};
+for (const k in CG) I[k] = new Instancer(CG[k]);
+const PEOPLE_PARTS = ["torso", "stripe", "head", "thigh", "shin", "arm", "can", "capCrown", "capBrim", "hatCrown", "hatBrim"];
+
+const SKIN = ["#f1c9a5", "#e0ac69", "#c68642", "#8d5524", "#ffdbac"];
+const SHIRTS = ["#d8342c", "#2e6bd1", "#f2c230", "#ffffff", "#3aa057", "#222222", "#7a4fc0", "#e07b28", "#5bc0de", "#8b5a2b"];
+const PANTS = ["#2c4a7a", "#3a3a3a", "#c2a878", "#1f2f4f", "#6b6b4f"];
+const HATCOL = ["#ffffff", "#d8342c", "#222222", "#2e6bd1", "#c2a878", "#3aa057", "#7a5a3a"];
+const CANS = ["#c0c0c0", "#d8342c", "#2e6bd1", "#d4a017", "#2f8f4f"];
+const CHAIRCOL = ["#1f3f7a", "#2f6a3a", "#a8322a", "#2a2a2a", "#2a6fa8"];
+const UMBCOL = ["#d8342c", "#f2c230", "#2e6bd1", "#ffffff", "#3aa057", "#e07b28"];
+const pick = (R, a) => a[(R() * a.length) | 0];
+
+const crowd = { people: [], flags: [], avoid: [], hype: 0 };
+
+// fan flags: original simple designs
+const flagTexCache = {};
+function flagTexture(d) {
+  if (flagTexCache[d]) return flagTexCache[d];
+  const c = document.createElement("canvas"); c.width = 128; c.height = 80;
+  const x = c.getContext("2d");
+  if (d === "chequer") { for (let i = 0; i < 8; i++) for (let j = 0; j < 5; j++) { x.fillStyle = (i + j) % 2 ? "#111" : "#f4f4f4"; x.fillRect(i * 16, j * 16, 16, 16); } }
+  else if (d === "devils") { x.fillStyle = "#c22e22"; x.fillRect(0, 0, 128, 80); x.fillStyle = "#ffc861"; x.font = "bold 22px 'Trebuchet MS', sans-serif"; x.textAlign = "center"; x.fillText("DUSTY", 64, 34); x.fillText("DEVILS", 64, 62); }
+  else if (d === "greengold") { x.fillStyle = "#1f7a3a"; x.fillRect(0, 0, 128, 40); x.fillStyle = "#f2c230"; x.fillRect(0, 40, 128, 40); }
+  else if (d === "redwhite") { x.fillStyle = "#d8342c"; x.fillRect(0, 0, 128, 80); x.fillStyle = "#fff"; x.beginPath(); x.moveTo(0, 62); x.lineTo(0, 80); x.lineTo(18, 80); x.lineTo(128, 18); x.lineTo(128, 0); x.lineTo(110, 0); x.closePath(); x.fill(); }
+  else if (d === "bluewhite") { x.fillStyle = "#2e6bd1"; x.fillRect(0, 0, 128, 80); x.fillStyle = "#fff"; x.fillRect(0, 30, 128, 20); }
+  else { x.fillStyle = "#ffd21f"; x.fillRect(0, 0, 128, 80); }   // marshal yellow
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return (flagTexCache[d] = t);
+}
+function makeFlag(design, small) {
+  const g = new THREE.Group(); g.matrixAutoUpdate = false;
+  const len = small ? 2.2 : 4.2, w = small ? 1.5 : 2.6, h = small ? 1.0 : 1.6;
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, len, 5), new THREE.MeshLambertMaterial({ color: "#d9d9d9" }));
+  pole.position.y = len / 2; pole.castShadow = true; g.add(pole);
+  const geo = new THREE.PlaneGeometry(w, h, 8, 3); geo.translate(w / 2, len - h / 2 - 0.05, 0);
+  const cloth = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: flagTexture(design), side: THREE.DoubleSide }));
+  cloth.castShadow = true; g.add(cloth);
+  scene.add(g);
+  crowd.flags.push({ geo, base: geo.attributes.position.array.slice(), w, phase: Math.random() * 6, amp: 1, owner: null });
+  return { g, flag: crowd.flags[crowd.flags.length - 1] };
+}
+
+function makePerson(o, R) {
+  const p = Object.assign({ phase: R() * 10, headYaw: 0, excite: 0, drinkPose: 0, drinking: 0, nextDrink: 2 + R() * 12 }, o);
+  const skin = pick(R, SKIN);
+  const shirt = o.marshal ? "#ff7a12" : pick(R, SHIRTS);
+  const pants = o.marshal ? "#1f2a44" : pick(R, PANTS);
+  const armCol = o.marshal ? shirt : R() < 0.6 ? skin : shirt;
+  const P = p.parts = {
+    torso: I.torso.add(_id, shirt), head: I.head.add(_id, skin),
+    thighL: I.thigh.add(_id, pants), thighR: I.thigh.add(_id, pants),
+    shinL: I.shin.add(_id, pants), shinR: I.shin.add(_id, pants),
+    armL: I.arm.add(_id, armCol), armR: I.arm.add(_id, armCol)
+  };
+  if (o.marshal) P.stripe = I.stripe.add(_id, "#e8e8e8");
+  if (o.can) P.can = I.can.add(_id, pick(R, CANS));
+  const hc = o.marshal ? "#ffffff" : pick(R, HATCOL);
+  if (o.hat === "cap") { P.hatA = ["capCrown", I.capCrown.add(_id, hc)]; P.hatB = ["capBrim", I.capBrim.add(_id, hc)]; }
+  else if (o.hat === "wide") { P.hatA = ["hatCrown", I.hatCrown.add(_id, hc)]; P.hatB = ["hatBrim", I.hatBrim.add(_id, hc)]; }
+  if (o.flag) p.flagObj = makeFlag(o.flag, o.marshal);
+  crowd.people.push(p);
+  crowd.avoid.push([p.x, p.y]);
+  posePerson(p, 0);
+  return p;
+}
+
+const lerp = (a, b, f) => a + (b - a) * f;
+const smooth = (a, b, x) => { const f = Math.max(0, Math.min(1, (x - a) / (b - a))); return f * f * (3 - 2 * f); };
+function posePerson(p, t) {
+  const sit = p.sit, py = sit ? 1.25 : 2.15;
+  const cheer = p.marshal ? 0 : smooth(0.3, 0.8, p.excite);
+  const jump = !sit && !p.marshal ? Math.abs(Math.sin(t * 9 + p.phase)) * 0.6 * smooth(0.4, 0.9, p.excite) : 0;
+  _e.set(0, p.yaw, 0); _q.setFromEuler(_e); _v.set(p.x, jump, p.y); _root.compose(_v, _q, _cs);
+  const P = p.parts;
+  I.torso.set(P.torso, local(_m, _root, 0, py + 0.72, sit ? -0.06 : 0, sit ? -0.12 : 0));
+  if (P.stripe !== undefined) I.stripe.set(P.stripe, local(_m, _root, 0, py + 0.95, 0));
+  local(_head, _root, 0, py + 1.85, sit ? -0.16 : 0, -0.45 * p.drinkPose, p.headYaw, 0);
+  I.head.set(P.head, _head);
+  if (P.hatA) {
+    const wide = P.hatA[0] === "hatCrown";
+    I[P.hatA[0]].set(P.hatA[1], local(_m, _head, 0, wide ? 0.32 : 0.1, 0));
+    I[P.hatB[0]].set(P.hatB[1], local(_m, _head, 0, wide ? 0.16 : 0.12, wide ? 0 : 0.38));
+  }
+  for (const s of [1, -1]) {
+    const th = s > 0 ? P.thighL : P.thighR, sh = s > 0 ? P.shinL : P.shinR;
+    if (sit) { I.thigh.set(th, local(_m, _root, s * 0.27, py, 0, -Math.PI / 2)); I.shin.set(sh, local(_m, _root, s * 0.27, py, 0.95)); }
+    else { I.thigh.set(th, local(_m, _root, s * 0.27, py, 0)); I.shin.set(sh, local(_m, _root, s * 0.27, py - 0.95, 0)); }
+  }
+  // arms: left (+x) and right (-x). Rotating about z swings a hand outwards / up.
+  const wave = Math.sin(t * (p.marshal ? 7 : 5) + p.phase);
+  for (const s of [1, -1]) {
+    let rx = sit ? -0.55 : -0.08, rz = s * 0.12;                       // resting
+    if (s < 0 && p.marshal) { rx = lerp(-0.6, -0.2, p.excite); rz = lerp(-0.15, -2.4 + wave * 0.45, p.excite); }
+    else if (s < 0 && p.flagObj) { rx = -0.2; rz = -2.4 + wave * (0.25 + 0.3 * p.excite); }
+    else {
+      if (s < 0) { rx = lerp(rx, -2.25, p.drinkPose); rz = lerp(rz, 0.35, p.drinkPose); }
+      rx = lerp(rx, -0.15, cheer); rz = lerp(rz, s * (2.6 + Math.sin(t * 12 + p.phase + s) * 0.25), cheer);
+    }
+    local(_arm, _root, s * 0.68, py + 1.33, sit ? -0.1 : 0, rx, 0, rz);
+    I.arm.set(s > 0 ? P.armL : P.armR, _arm);
+    if (s < 0) {
+      if (P.can !== undefined) I.can.set(P.can, local(_m, _arm, 0, -1.28, 0.1));
+      if (p.flagObj) { p.flagObj.g.matrix.copy(local(_m2, _arm, 0, -1.2, 0, Math.PI, 0, 0)); p.flagObj.g.matrixWorldNeedsUpdate = true; }
+    }
+  }
+}
+
+function placeChair(x, y, yaw, color) {
+  _e.set(0, yaw, 0); _q.setFromEuler(_e); _v.set(x, 0, y); _root.compose(_v, _q, _cs);
+  I.seat.add(local(_m, _root, 0, 1.1, 0), color);
+  I.back.add(local(_m, _root, 0, 1.75, -0.62, -0.22), color);
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) I.cleg.add(local(_m, _root, sx * 0.62, 0.55, sz * 0.5), "#3a3a3a");
+    I.carm.add(local(_m, _root, sx * 0.74, 1.55, 0), "#3a3a3a");
+  }
+}
+function placeUmbrella(x, y, yaw, color) {
+  _e.set(0, yaw, 0); _q.setFromEuler(_e); _v.set(x, 0, y); _root.compose(_v, _q, _cs);
+  I.pole.add(local(_m, _root, 0, 2.4, -0.44, -0.18), "#dddddd");
+  I.canopy.add(local(_m, _root, 0, 5.0, -0.9, -0.18), color);
+}
+function placeEsky(x, y, yaw, body, lid) {
+  _e.set(0, yaw + 0.3, 0); _q.setFromEuler(_e); _v.set(x, 0, y); _root.compose(_v, _q, _cs);
+  I.eskyBody.add(local(_m, _root, 0, 0.5, 0), body);
+  I.eskyLid.add(local(_m, _root, 0, 1.12, 0), lid);
+}
+
+function buildCrowd() {
+  const R = rng(21);
+  const inView = (x, y) => x > 5 && x < 315 && y > 6 && y < 196;
+  // marshals on the outside of the sharpest corners
+  const p = track.pts, n = p.length, K = 12;
+  const curv = p.map((_, i) => { const a = p[(i - K + n) % n], b = p[(i + K) % n]; return Math.abs(a.tx * b.ty - a.ty * b.tx); });
+  const order = [...curv.keys()].sort((i, j) => curv[j] - curv[i]);
+  const posts = [];
+  for (const i of order) {
+    if (posts.length >= 6) break;
+    if (posts.some(j => { const d = Math.abs(p[i].s - p[j].s); return Math.min(d, track.len - d) < 75; })) continue;
+    const a = p[(i - K + n) % n], b = p[(i + K) % n];
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;           // the corner's inside is towards this chord
+    const cands = [1, -1].map(sg => ({ x: p[i].x - p[i].ty * sg * (HW + 8), y: p[i].y + p[i].tx * sg * (HW + 8) }))
+      .filter(c => inView(c.x, c.y) && nearest(c.x, c.y).d > HW + 6)
+      .sort((u, v) => Math.hypot(v.x - mx, v.y - my) - Math.hypot(u.x - mx, u.y - my));
+    if (!cands.length) continue;
+    posts.push(i);
+    const c = cands[0], yaw = Math.atan2(p[i].x - c.x, p[i].y - c.y);
+    makePerson({ x: c.x, y: c.y, yaw, sit: false, marshal: true, hat: "cap", flag: "yellow" }, R);
+    // post sign behind the marshal
+    _e.set(0, yaw, 0); _q.setFromEuler(_e); _v.set(c.x, 0, c.y); _root.compose(_v, _q, _cs);
+    I.signPole.add(local(_m, _root, 1.4, 1.7, -1.2), "#dddddd");
+    I.sign.add(local(_m, _root, 1.4, 3.1, -1.2), "#ff7a12");
+  }
+  // spectator groups along the fences and in the infield
+  const groups = [];
+  for (let tries = 0; tries < 3000 && groups.length < 22; tries++) {
+    const x = 10 + R() * 300, y = 8 + R() * 186;
+    const nr = nearest(x, y);
+    if (nr.d < HW + 10 || nr.d > HW + 24) continue;
+    if (groups.some(g => Math.hypot(g.x - x, g.y - y) < 21)) continue;
+    if (crowd.avoid.some(([ax, ay]) => Math.hypot(ax - x, ay - y) < 14)) continue;
+    groups.push({ x, y, yaw: Math.atan2(nr.px - x, nr.py - y) });
+  }
+  const designs = ["chequer", "devils", "greengold", "redwhite", "bluewhite"];
+  for (const g of groups) {
+    const camp = R() < 0.6;
+    const count = 2 + ((R() * 3) | 0);
+    const cs = Math.cos(g.yaw), sn = Math.sin(g.yaw);
+    const at = (lx, back) => ({ x: g.x + lx * cs - back * sn, y: g.y - lx * sn - back * cs });
+    const ok = q => nearest(q.x, q.y).d > HW + 7 && inView(q.x, q.y);
+    let flags = 0;
+    for (let k = 0; k < count; k++) {
+      const q = at((k - (count - 1) / 2) * 2.4 * CS, 0);
+      if (!ok(q)) continue;
+      const sit = camp && R() < 0.85;
+      const yaw = g.yaw + (R() - 0.5) * 0.4;
+      if (sit) placeChair(q.x, q.y, yaw, pick(R, CHAIRCOL));
+      const flag = !sit && flags < 2 && R() < 0.55 ? pick(R, designs) : null;
+      if (flag) flags++;
+      const hr = R();
+      makePerson({ x: q.x, y: q.y, yaw, sit, can: !flag && R() < (sit ? 0.75 : 0.45), hat: hr < 0.4 ? "cap" : hr < 0.65 ? "wide" : null, flag }, R);
+    }
+    if (camp && R() < 0.8) { const q = at(((count + 1) / 2) * 2.4 * CS * (R() < 0.5 ? -1 : 1), 0.3); if (ok(q)) placeEsky(q.x, q.y, g.yaw, R() < 0.6 ? "#f4f4f4" : "#2a62c9", pick(R, ["#d8342c", "#2a62c9", "#f4f4f4"])); }
+    if (camp && R() < 0.5) { const q = at((R() - 0.5) * 2, 2.2 * CS); if (ok(q)) placeUmbrella(q.x, q.y, g.yaw, pick(R, UMBCOL)); }
+    crowd.avoid.push([g.x, g.y]);
+  }
+  for (const k in I) I[k].dirty();
+}
+buildCrowd();
+
+function updateCrowd(dt) {
+  const t = raceTime, T = truck;
+  crowd.hype = Math.max(0, crowd.hype - dt);
+  for (const p of crowd.people) {
+    const dx = T.x - p.x, dy = T.y - p.y, d = Math.hypot(dx, dy);
+    const near = Math.max(0, 1 - d / 55);
+    const target = Math.min(1, Math.max(near * (p.marshal ? 1.6 : 1.1), crowd.hype > 0 && d < 100 ? 0.9 : 0));
+    p.excite += (target - p.excite) * Math.min(1, dt * 4);
+    let want = Math.atan2(dx, dy) - p.yaw;
+    while (want > Math.PI) want -= 2 * Math.PI;
+    while (want < -Math.PI) want += 2 * Math.PI;
+    want = Math.max(-1.3, Math.min(1.3, want));
+    p.headYaw += (want - p.headYaw) * Math.min(1, dt * 5);
+    if (p.parts.can !== undefined) {
+      p.nextDrink -= dt;
+      if (p.nextDrink <= 0) { p.drinking = 2.2; p.nextDrink = 6 + Math.random() * 10; }
+    }
+    if (p.drinking > 0) p.drinking -= dt;
+    p.drinkPose += ((p.drinking > 0 && p.excite < 0.4 ? 1 : 0) - p.drinkPose) * Math.min(1, dt * 5);
+    if (p.flagObj) p.flagObj.flag.amp = p.marshal ? 0.25 + 0.9 * p.excite : 0.8 + 0.5 * p.excite;
+    posePerson(p, t);
+  }
+  for (const k of PEOPLE_PARTS) I[k].dirty();
+  for (const f of crowd.flags) {
+    const a = f.geo.attributes.position.array, b = f.base;
+    for (let i = 0; i < a.length; i += 3) {
+      const u = b[i] / f.w;
+      a[i + 2] = Math.sin(b[i] * 2.2 - t * 8 + f.phase) * 0.32 * u * f.amp;
+      a[i + 1] = b[i + 1] - u * u * 0.25 * (1.2 - Math.min(1.2, f.amp));
+    }
+    f.geo.attributes.position.needsUpdate = true;
+    f.geo.computeVertexNormals();
+  }
+}
+
 // bushes
 {
   const R = rng(99);
@@ -411,6 +678,7 @@ function box(w, h, d, color, x, y, z, parent = scenery) {
   for (let i = 0; i < 400 && spots.length < 60; i++) {
     const x = GX0 + 10 + R() * (GW - 20), y = -12 + R() * 245;
     if (nearest(x, y).d < HW + 8) continue;
+    if (crowd.avoid.some(([ax, ay]) => Math.hypot(ax - x, ay - y) < 9)) continue;
     if (y < -8 && x > 60 && x < 260) continue;
     spots.push([x, y, 1.8 + R() * 2.6]);
   }
@@ -783,6 +1051,7 @@ function updateTruck(t, dt) {
       t.vy -= (1 + P.wallBounce) * vn * uy;
       t.vx *= P.wallScrub; t.vy *= P.wallScrub;
       if (vn > 12) { sfxThud(vn / P.maxSpeed); dust(t.x + ux * 4, t.y + uy * 4, 6 + vn / 10, 1.5); t.bump = Math.min(1, vn / 80); }
+      if (vn > 40) crowd.hype = 1.6;   // big hit: the crowd goes wild
     }
   }
   t.vf = vf; t.thr = thr;
@@ -846,6 +1115,7 @@ function fireNitro() {
   if (t.nitros <= 0 || t.boost > 0) return;
   t.nitros--;
   t.boost = P.nitroTime;
+  crowd.hype = 1.2;
   sfxNitro();
 }
 
@@ -975,6 +1245,7 @@ function syncScene(dt) {
     skidDirty = false;
   }
   debugLine.visible = debug;
+  updateCrowd(dt);
 }
 
 // ---------- HUD (2D overlay) ----------
@@ -1391,7 +1662,7 @@ setMode();
 resetTruck();
 buildTuning();
 buildCam();
-window.DD = { truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
+window.DD = { crowd, truck, keys, nearest, track, camera, CAM, pickups, fireNitro, audio: A };   // handy for testing in the console
 let last = performance.now(), accT = 0;
 function frame(now) {
   const real = Math.min(0.05, (now - last) / 1000);
