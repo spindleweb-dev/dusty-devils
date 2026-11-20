@@ -24,7 +24,7 @@
 //     the middle copy is in steady state.
 // ============================================================
 // ENGINE-SYNTH-START
-const ENGINE_LOOP_RPMS = [720, 1500, 2400, 3500, 4800, 6300];
+const ENGINE_LOOP_RPMS = [580, 1200, 2100, 3100, 4200, 5400];   // big, low-revving monster engine
 
 function engineHash(a, b) {
   let h = (a * 374761393 + b * 668265263) | 0;
@@ -51,26 +51,30 @@ function makeBiquad(type, f, q, sr) {
 
 function makeEngineLoop(sr, rpm, seed = 7) {
   const cycleSec = 120 / rpm;                          // two crank turns
-  const cycles = Math.max(4, Math.round(1.1 / cycleSec));
+  // near idle: big-cam lope, so make the loop longer so the lumpiness doesn't repeat too obviously
+  const idleness = Math.max(0, Math.min(1, (1500 - rpm) / 900));
+  const cycles = Math.max(4, Math.round((1.1 + 1.1 * idleness) / cycleSec));
   const n = Math.round(cycles * cycleSec * sr);
   const fires = cycles * 8;
   const ORDER = [1, 8, 4, 3, 6, 5, 7, 2];
-  const lope = Math.max(0.05, 0.22 - rpm / 25000);     // idle is lumpier than high revs
+  const lope = 0.07 + 0.3 * idleness;                  // idle is far lumpier than high revs
   const cylAmp = [];
   for (let c = 1; c <= 8; c++) cylAmp[c] = 1 + (engineHash(seed, c) - 0.5) * 2 * lope;
+  // cam overlap makes a couple of cylinders lazy at idle, which gives the loping "lump-lump" beat
+  cylAmp[3] *= 1 - 0.38 * idleness;
+  cylAmp[6] *= 1 - 0.22 * idleness;
 
   // excitation for each bank, wrapped so the loop is seamless
   const ex = [new Float32Array(n), new Float32Array(n)];
   // near idle, pulses are shorter and ring less, so each cylinder is heard separately
-  const idleness = Math.max(0, Math.min(1, (1500 - rpm) / 700));
-  const width = Math.max(0.0016, (60 / rpm) * (0.11 - 0.035 * idleness)) * sr;   // pulse length in samples
-  const decay = 3.2 + 1.6 * idleness;
+  const width = Math.max(0.0016, (60 / rpm) * (0.11 - 0.045 * idleness)) * sr;   // pulse length in samples
+  const decay = 3.2 + 2.4 * idleness;
   for (let k = 0; k < fires; k++) {
     const cyl = ORDER[k % 8];
     const bank = cyl % 2 ? 0 : 1;
-    const jitT = (engineHash(seed + 11, k) - 0.5) * 0.0004 * sr * (800 / rpm);
+    const jitT = (engineHash(seed + 11, k) - 0.5) * (0.0003 + 0.0016 * idleness) * sr;
     const start = k / fires * n + jitT;
-    const amp = cylAmp[cyl] * (1 + (engineHash(seed + 23, k) - 0.5) * 0.12);
+    const amp = cylAmp[cyl] * (1 + (engineHash(seed + 23, k) - 0.5) * (0.12 + 0.3 * idleness));
     const len = Math.ceil(width * 4);
     for (let j = 0; j < len; j++) {
       const x = j / width;
@@ -83,14 +87,14 @@ function makeEngineLoop(sr, rpm, seed = 7) {
 
   // exhaust: each bank has its own pipe resonances
   const banks = [
-    { res: [[74, 2.4, 1.25], [168, 3.2, 0.6], [520, 4.5, 0.14]], delay: 0 },
-    { res: [[69, 2.4, 1.25], [181, 3.2, 0.6], [490, 4.5, 0.14]], delay: Math.round(0.0013 * sr) }
+    { res: [[56, 2.2, 1.3], [128, 3.0, 0.6], [400, 4.5, 0.12]], delay: 0 },
+    { res: [[52, 2.2, 1.3], [140, 3.0, 0.6], [375, 4.5, 0.12]], delay: Math.round(0.0015 * sr) }
   ];
-  const bright = 650 + rpm * 0.3;          // darker muffler = deeper tone
+  const bright = 520 + rpm * 0.28;          // darker muffler = deeper tone
   const drive = 1.4 + rpm / 4000;
   const out = new Float32Array(n);
   const total = n * 3;
-  const fil = banks.map(b => ({ bp: b.res.map(([f, q, g]) => [makeBiquad("bp", f, q * (1 - 0.3 * idleness), sr), g]), lp: makeBiquad("lp", 420, 0.7, sr), delay: b.delay }));
+  const fil = banks.map(b => ({ bp: b.res.map(([f, q, g]) => [makeBiquad("bp", f, q * (1 - 0.3 * idleness), sr), g]), lp: makeBiquad("lp", 320, 0.7, sr), delay: b.delay }));
   const muffler = makeBiquad("lp", bright, 0.9, sr);
   const tinOut = new Float32Array(n);
   const tinHp = makeBiquad("hp", 1600, 0.7, sr);
@@ -147,22 +151,24 @@ function engineMix(rpm) {
 
 // ---- Pretend gearbox (sound only) ----
 // speed (0..1.2 of top speed) -> gear and engine rpm. Upshifts near the
-// red line with a short power cut; downshifts with a throttle blip.
+// red line (~5000 rpm) with a short power cut; downshifts with a throttle blip.
+// The supercharger whine is a separate live layer: pitch = rpm / 60 * BLOWER_RATIO.
+const BLOWER_RATIO = 14;
 const GEAR_TOPS = [0.32, 0.55, 0.8, 1.2];   // speed reached at the red line in each gear
-function makeGearbox() { return { gear: 0, rpm: 720, cut: 0, blip: 0, shifted: 0, since: 1 }; }
+function makeGearbox() { return { gear: 0, rpm: 580, cut: 0, blip: 0, shifted: 0, since: 1 }; }
 function gearboxStep(g, sp, thr, boost, dt) {
-  const inGear = i => 900 + Math.max(0, sp) / GEAR_TOPS[i] * 5300;
+  const inGear = i => 800 + Math.max(0, sp) / GEAR_TOPS[i] * 4500;
   g.shifted = 0;
   g.since += dt;
   if (g.cut > 0) g.cut -= dt;
-  else if (thr && g.rpm > 5800 && g.gear < GEAR_TOPS.length - 1) { g.gear++; g.cut = 0.16; g.shifted = 1; g.since = 0; }
-  else if (g.gear > 0 && g.since > 0.35 && inGear(g.gear) < (thr ? 2600 : 1700)) { g.gear--; g.cut = 0.1; g.blip = 0.16; g.shifted = -1; g.since = 0; }
+  else if (thr && g.rpm > 5000 && g.gear < GEAR_TOPS.length - 1) { g.gear++; g.cut = 0.16; g.shifted = 1; g.since = 0; }
+  else if (g.gear > 0 && g.since > 0.35 && inGear(g.gear) < (thr ? 2200 : 1400)) { g.gear--; g.cut = 0.1; g.blip = 0.16; g.shifted = -1; g.since = 0; }
   let target = inGear(g.gear);
-  if (g.gear === 0 && thr && sp < 0.12) target = Math.max(target, 2300 + sp * 9000);   // launch / wheelspin
-  if (g.gear === 0 && !thr && sp < 0.06) target = 720;                                 // clutch in, idling
+  if (g.gear === 0 && thr && sp < 0.12) target = Math.max(target, 2000 + sp * 8000);   // launch / wheelspin
+  if (g.gear === 0 && !thr && sp < 0.06) target = 580;                                 // clutch in, idling
   if (boost) target += 400;
   if (g.blip > 0) { g.blip -= dt; target += 700; }
-  target = Math.max(700, Math.min(6600, target));
+  target = Math.max(560, Math.min(5900, target));
   const rate = g.cut > 0 ? 14 : target > g.rpm ? 6 : 3;
   g.rpm += (target - g.rpm) * Math.min(1, dt * rate);
   const load = g.blip > 0 || (thr && g.cut <= 0) ? 1 : 0;

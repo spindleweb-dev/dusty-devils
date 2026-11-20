@@ -1,12 +1,12 @@
 // Renders a short demo of the synthesised V8 the same way the game plays it:
 // seamless loops at fixed RPMs, blended and pitched to the current rpm.
-// Usage: node tools/render_engine_demo.mjs out.wav [tinAmount=0.35] [bassDb=7]
+// Usage: node tools/render_engine_demo.mjs out.wav [tin=0.35] [bassDb=7] [blower=0.3]
 import fs from "node:fs";
 
 const src = fs.readFileSync(new URL("./engine_synth.js", import.meta.url), "utf8");
 const code = src.split("// ENGINE-SYNTH-START")[1].split("// ENGINE-SYNTH-END")[0];
-const { ENGINE_LOOP_RPMS, makeEngineLoop, engineMix, makeGearbox, gearboxStep } =
-  new Function(code + "; return { ENGINE_LOOP_RPMS, makeEngineLoop, engineMix, makeGearbox, gearboxStep };")();
+const { ENGINE_LOOP_RPMS, makeEngineLoop, engineMix, makeGearbox, gearboxStep, BLOWER_RATIO } =
+  new Function(code + "; return { ENGINE_LOOP_RPMS, makeEngineLoop, engineMix, makeGearbox, gearboxStep, BLOWER_RATIO };")();
 
 const sr = 44100;
 const TIN = +(process.argv[3] ?? 0.35);   // same default as the game's slider
@@ -28,6 +28,8 @@ function lowShelf(f0, dB) {
   return x => { const y = b[0] * x + b[1] * x1 + b[2] * x2 - a[0] * y1 - a[1] * y2; x2 = x1; x1 = x; y2 = y1; y1 = y; return y; };
 }
 const BASS = +(process.argv[4] ?? 7);
+const BLOW = +(process.argv[5] ?? 0.3);
+let bph = 0, blp = 0;
 const shelf = lowShelf(140, BASS);
 const dur = 18, n = dur * sr;
 const out = new Float32Array(n);
@@ -59,7 +61,12 @@ for (let i = 0; i < n; i++) {
   const cut = 1500 + load * 3500;
   const a = 1 - Math.exp(-2 * Math.PI * cut / sr);
   lp += (s - lp) * a;
-  out[i] = (shelf(lp) * (0.65 + load * 0.35) + tin * TIN * (0.4 + load * 0.6)) * 0.55;
+  // supercharger whine, as in the game
+  bph = (bph + gb.rpm / 60 * BLOWER_RATIO / sr) % 1;
+  const tri = 1 - 4 * Math.abs(bph - 0.5), oct = Math.sin(4 * Math.PI * bph) * 0.35;
+  blp += ((tri + oct) - blp) * (1 - Math.exp(-2 * Math.PI * 2600 / sr));
+  const whine = blp * BLOW * (0.015 + 0.045 * load) * (0.4 + gb.rpm / 5400) / 0.5;
+  out[i] = (shelf(lp) * (0.65 + load * 0.35) + tin * TIN * (0.4 + load * 0.6) + whine) * 0.55;
 }
 
 const buf = Buffer.alloc(44 + n * 2);
