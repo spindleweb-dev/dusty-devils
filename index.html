@@ -1390,7 +1390,7 @@ function fitCamera() {
     camera.lookAt(target);
     camera.updateMatrixWorld();
   };
-  const topLimit = 0.44;     // leave room for the HUD panels, grandstand, team pits and car park
+  const topLimit = 0.6;      // leave room for the HUD panels, grandstand and team pits (car park just peeks out behind)
   for (let iter = 0; iter < 8; iter++) {
     let lo = 20, hi = 5000;
     for (let k = 0; k < 40; k++) {
